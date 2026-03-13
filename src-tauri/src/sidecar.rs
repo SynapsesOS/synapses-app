@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
-use tokio::time::sleep;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -201,6 +200,45 @@ pub async fn check_health(port: u16) -> bool {
         .unwrap_or_default();
     let url = format!("http://localhost:{}/v1/health", port);
     client.get(&url).send().await.map(|r| r.status().is_success()).unwrap_or(false)
+}
+
+/// Kill whatever process is currently listening on `port`.
+/// Uses lsof on macOS/Linux to find and kill by port — guarantees no duplicate.
+pub fn kill_by_port(port: u16) {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        // lsof -ti tcp:PORT returns the PID(s) listening on that port
+        if let Ok(out) = std::process::Command::new("lsof")
+            .args(["-ti", &format!("tcp:{}", port)])
+            .output()
+        {
+            let pids = String::from_utf8_lossy(&out.stdout);
+            for pid_str in pids.split_whitespace() {
+                if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                    let _ = std::process::Command::new("kill")
+                        .args(["-TERM", &pid.to_string()])
+                        .status();
+                }
+            }
+        }
+    }
+}
+
+/// Try to find the PID of the process currently listening on `port`.
+pub fn pid_for_port(port: u16) -> Option<u32> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        if let Ok(out) = std::process::Command::new("lsof")
+            .args(["-ti", &format!("tcp:{}", port)])
+            .output()
+        {
+            let pids = String::from_utf8_lossy(&out.stdout);
+            return pids.split_whitespace()
+                .next()
+                .and_then(|s| s.trim().parse::<u32>().ok());
+        }
+    }
+    None
 }
 
 pub fn synapses_data_dir() -> PathBuf {

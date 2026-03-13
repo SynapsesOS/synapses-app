@@ -3,11 +3,10 @@ mod sidecar;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tokio::time::sleep;
 
-use sidecar::{check_health, find_binary, SidecarInfo, SidecarManager, SidecarManagerInner, ServiceStatus};
+use sidecar::{check_health, find_binary, kill_by_port, pid_for_port, SidecarInfo, SidecarManager, SidecarManagerInner, ServiceStatus};
 
 // ── State types ──────────────────────────────────────────────────────────────
 
@@ -22,23 +21,21 @@ fn get_service_status(state: State<AppSidecarManager>) -> Vec<SidecarInfo> {
 
 #[tauri::command]
 async fn restart_service(name: String, state: State<'_, AppSidecarManager>) -> Result<String, String> {
-    let (binary, args) = {
+    let (binary, args, port) = {
         let mgr = state.0.lock().unwrap();
-        mgr.get_binary_and_args(&name)
-            .ok_or_else(|| format!("Unknown service: {}", name))?
+        let (bin, a) = mgr.get_binary_and_args(&name)
+            .ok_or_else(|| format!("Unknown service: {}", name))?;
+        let port = mgr.sidecars.get(&name).map(|s| s.port).unwrap_or(0);
+        (bin, a, port)
     };
 
     let bin_path = find_binary(&binary)
         .ok_or_else(|| format!("Binary '{}' not found on PATH or ~/.synapses/bin", binary))?;
 
-    {
-        let mgr = state.0.lock().unwrap();
-        if let Some(info) = mgr.get_info(&name) {
-            if let Some(pid) = info.pid {
-                let _ = std::process::Command::new("kill").arg(pid.to_string()).status();
-            }
-        }
-    }
+    // Kill anything on the port — catches both tracked PID and externally started processes
+    kill_by_port(port);
+    // Small grace period for the port to release
+    std::thread::sleep(std::time::Duration::from_millis(300));
 
     let mut cmd = std::process::Command::new(&bin_path);
     for arg in &args {
@@ -278,7 +275,28 @@ fn write_app_settings(settings: HashMap<String, serde_json::Value>) -> Result<()
 
 // ── Health watcher loop ───────────────────────────────────────────────────────
 
+/// On startup: for each sidecar port, check if something is already running.
+/// If yes, adopt it (record its PID, mark healthy) so we never spawn a duplicate.
+async fn adopt_running_sidecars(mgr: SidecarManager) {
+    let services: Vec<(String, u16)> = {
+        let m = mgr.lock().unwrap();
+        m.sidecars.iter().map(|(k, s)| (k.clone(), s.port)).collect()
+    };
+    for (name, port) in services {
+        if check_health(port).await {
+            let existing_pid = pid_for_port(port);
+            let mut m = mgr.lock().unwrap();
+            m.record_success(&name);
+            if let Some(s) = m.sidecars.get_mut(&name) {
+                s.pid = existing_pid;
+            }
+        }
+    }
+}
+
 async fn health_watch_loop(app: AppHandle, mgr: SidecarManager) {
+    // First: adopt any sidecars already running before doing anything
+    adopt_running_sidecars(mgr.clone()).await;
     sleep(Duration::from_secs(3)).await;
 
     loop {
@@ -313,6 +331,10 @@ async fn health_watch_loop(app: AppHandle, mgr: SidecarManager) {
 
                         if let Some((binary, args)) = binary_info {
                             if let Some(bin_path) = find_binary(&binary) {
+                                // Kill anything already on the port before spawning
+                                kill_by_port(port);
+                                std::thread::sleep(std::time::Duration::from_millis(300));
+
                                 let mut cmd = std::process::Command::new(&bin_path);
                                 for arg in &args {
                                     cmd.arg(arg);
