@@ -106,7 +106,7 @@ export function Onboarding({ onComplete }: Props) {
         <button
           className="btn-primary"
           onClick={() => setStep(2)}
-          disabled={!indexedPath && !indexOutput.includes("Error")}
+          disabled={indexing}
         >
           {indexedPath ? "Continue" : "Skip for now"} <ArrowRight size={14} />
         </button>
