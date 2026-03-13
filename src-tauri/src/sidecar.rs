@@ -131,6 +131,7 @@ impl SidecarManagerInner {
         self.sidecars.get(name).map(|s| s.to_info())
     }
 
+    #[allow(dead_code)]
     pub fn set_status(&mut self, name: &str, status: ServiceStatus) {
         if let Some(s) = self.sidecars.get_mut(name) {
             s.status = status;
@@ -178,6 +179,7 @@ impl SidecarManagerInner {
         self.sidecars.get(name).map(|s| (s.binary.clone(), s.args.clone()))
     }
 
+    #[allow(dead_code)]
     pub fn is_enabled(&self, name: &str) -> bool {
         self.sidecars.get(name).map(|s| s.enabled).unwrap_or(false)
     }

@@ -25,7 +25,6 @@ const [indexingPath, setIndexingPath] = useState<string | null>(null);
       const list = JSON.parse(raw) as Project[];
       setProjects(list);
     } catch {
-      // list command may not support --json yet; silently ignore
       setProjects([]);
     }
   }

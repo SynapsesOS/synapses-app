@@ -38,7 +38,10 @@ export function ServiceCard({ info, onRestart, onStop }: Props) {
     <div className="card">
       <div className="card-header">
         <div className="card-title">
-          <span className="status-dot" style={{ background: dot }} />
+          <span
+            className={`status-dot ${info.status === "healthy" ? "healthy" : ""}`}
+            style={info.status !== "healthy" ? { background: dot } : undefined}
+          />
           <span className="service-name">{info.name}</span>
         </div>
         <div className="card-actions">

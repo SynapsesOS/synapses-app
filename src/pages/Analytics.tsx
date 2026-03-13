@@ -3,12 +3,37 @@ import { BarChart2, Zap, Cpu, Users, RefreshCw, AlertCircle } from "lucide-react
 
 const PULSE_URL = "http://localhost:11437";
 
-interface DashboardData {
+// Matches pulse's /v1/dashboard response shape
+interface PulseSummary {
   total_tool_calls?: number;
-  total_tokens?: number;
-  top_tools?: { name: string; count: number }[];
-  agents?: { id: string; calls: number; last_seen?: string }[];
-  timeline?: { date: string; calls: number }[];
+  tokens_saved?: number;
+  tokens_delivered?: number;
+  savings_pct?: number;
+  cost_saved_usd?: number;
+  sessions?: number;
+}
+
+interface PulseToolStats {
+  name: string;
+  calls: number;
+  avg_ms?: number;
+  error_rate?: number;
+}
+
+interface PulseAgentStats {
+  agent_id: string;
+  sessions: number;
+  tool_calls: number;
+  tokens_saved: number;
+}
+
+interface DashboardData {
+  summary?: PulseSummary;
+  tools?: PulseToolStats[];
+  agents?: PulseAgentStats[];
+  timeline?: unknown[];
+  brain_costs?: unknown;
+  main_model?: string;
 }
 
 type Days = 7 | 30 | 90;
@@ -92,12 +117,12 @@ export function Analytics() {
               <StatCard
                 icon={<Zap size={16} style={{ color: "var(--accent)" }} />}
                 label="Tool Calls"
-                value={fmt(data.total_tool_calls)}
+                value={fmt(data.summary?.total_tool_calls)}
               />
               <StatCard
                 icon={<Cpu size={16} style={{ color: "var(--warning)" }} />}
-                label="Tokens Used"
-                value={fmt(data.total_tokens)}
+                label="Tokens Saved"
+                value={fmt(data.summary?.tokens_saved)}
               />
               <StatCard
                 icon={<Users size={16} style={{ color: "var(--success)" }} />}
@@ -108,17 +133,17 @@ export function Analytics() {
           </section>
 
           {/* Top tools */}
-          {data.top_tools && data.top_tools.length > 0 && (
+          {data.tools && data.tools.length > 0 && (
             <section className="settings-section">
               <h2 className="section-title">Top Tools</h2>
               <div className="analytics-list">
-                {data.top_tools.slice(0, 10).map((t) => (
+                {data.tools.slice(0, 10).map((t: PulseToolStats) => (
                   <div key={t.name} className="analytics-row">
                     <span className="analytics-name">
                       <BarChart2 size={13} style={{ opacity: 0.5 }} />
                       {t.name}
                     </span>
-                    <span className="analytics-count">{t.count.toLocaleString()}</span>
+                    <span className="analytics-count">{t.calls.toLocaleString()}</span>
                   </div>
                 ))}
               </div>
@@ -131,16 +156,14 @@ export function Analytics() {
               <h2 className="section-title">Agent Activity</h2>
               <div className="analytics-list">
                 {data.agents.map((a) => (
-                  <div key={a.id} className="analytics-row">
+                  <div key={a.agent_id} className="analytics-row">
                     <span className="analytics-name">
                       <Users size={13} style={{ opacity: 0.5 }} />
-                      {a.id}
+                      {a.agent_id}
                     </span>
                     <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
-                      {a.last_seen && (
-                        <span className="analytics-meta">{a.last_seen}</span>
-                      )}
-                      <span className="analytics-count">{a.calls} calls</span>
+                      <span className="analytics-meta">{a.sessions} sessions</span>
+                      <span className="analytics-count">{a.tool_calls} calls</span>
                     </div>
                   </div>
                 ))}
@@ -148,7 +171,7 @@ export function Analytics() {
             </section>
           )}
 
-          {data.top_tools?.length === 0 && data.agents?.length === 0 && (
+          {data.tools?.length === 0 && data.agents?.length === 0 && (
             <div className="empty-state">No data for this period yet.</div>
           )}
         </>

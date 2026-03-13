@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { useServices } from "../hooks/useServices";
 import { ServiceCard } from "../components/ServiceCard";
 
@@ -63,9 +64,9 @@ function QuickAction({
   href: string;
 }) {
   return (
-    <a className="quick-action" href={href}>
+    <Link className="quick-action" to={href}>
       <div className="quick-action-label">{label}</div>
       <div className="quick-action-desc">{desc}</div>
-    </a>
+    </Link>
   );
 }

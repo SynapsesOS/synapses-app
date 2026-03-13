@@ -14,7 +14,7 @@ export function Sidebar() {
   return (
     <nav className="sidebar">
       <div className="sidebar-logo">
-        <Zap size={20} className="logo-icon" />
+        <Zap size={18} className="logo-icon" />
         <span className="logo-text">Synapses</span>
       </div>
       <ul className="nav-list">
@@ -25,12 +25,13 @@ export function Sidebar() {
               end={to === "/"}
               className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}
             >
-              <Icon size={16} />
+              <Icon size={15} />
               <span>{label}</span>
             </NavLink>
           </li>
         ))}
       </ul>
+      <div className="sidebar-footer">v0.1.0</div>
     </nav>
   );
 }

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Brain, Download, RefreshCw, AlertCircle, MemoryStick } from "lucide-react";
 
 const BRAIN_URL = "http://localhost:11435";
+const OLLAMA_URL = "http://localhost:11434";
 
 const CURATED_MODELS = [
   { name: "qwen2.5-coder:1.5b", desc: "Default — fast, ~800 MB RAM", recommended: true },
@@ -49,11 +50,11 @@ export function Models() {
     if (!modelName.trim()) return;
     setPullStatuses((p) => ({ ...p, [modelName]: "pulling" }));
     try {
-      const res = await fetch(`${BRAIN_URL}/v1/models/pull`, {
+      const res = await fetch(`${OLLAMA_URL}/api/pull`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: modelName }),
-        signal: AbortSignal.timeout(300000),
+        body: JSON.stringify({ name: modelName, stream: false }),
+        signal: AbortSignal.timeout(600000),
       });
       if (res.ok) {
         setPullStatuses((p) => ({ ...p, [modelName]: "done" }));
