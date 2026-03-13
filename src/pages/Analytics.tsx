@@ -1,16 +1,17 @@
 import { useState, useEffect, useCallback } from "react";
-import { BarChart2, Zap, Cpu, Users, RefreshCw, AlertCircle } from "lucide-react";
+import { BarChart2, Zap, Cpu, Users, RefreshCw, AlertCircle, DollarSign, TrendingUp } from "lucide-react";
 
 const PULSE_URL = "http://localhost:11437";
 
-// Matches pulse's /v1/dashboard response shape
 interface PulseSummary {
   total_tool_calls?: number;
   tokens_saved?: number;
-  tokens_delivered?: number;
   savings_pct?: number;
   cost_saved_usd?: number;
   sessions?: number;
+  brain_enrichment_rate?: number;
+  task_completion_rate?: number;
+  correction_rate?: number;
 }
 
 interface PulseToolStats {
@@ -27,19 +28,24 @@ interface PulseAgentStats {
   tokens_saved: number;
 }
 
-interface DashboardData {
-  summary?: PulseSummary;
-  tools?: PulseToolStats[];
-  agents?: PulseAgentStats[];
-  timeline?: unknown[];
-  brain_costs?: unknown;
-  main_model?: string;
-}
-
 type Days = 7 | 30 | 90;
 
+function fmt(n?: number): string {
+  if (n == null) return "—";
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + "K";
+  return n.toLocaleString();
+}
+
+function latencyColor(ms?: number): string {
+  if (ms == null) return "var(--text-dim)";
+  if (ms < 500) return "var(--success)";
+  if (ms < 2000) return "var(--warning)";
+  return "var(--danger)";
+}
+
 export function Analytics() {
-  const [data, setData] = useState<DashboardData | null>(null);
+  const [data, setData] = useState<{ summary?: PulseSummary; tools?: PulseToolStats[]; agents?: PulseAgentStats[] } | null>(null);
   const [offline, setOffline] = useState(false);
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState<Days>(7);
@@ -47,36 +53,18 @@ export function Analytics() {
   const fetchDashboard = useCallback((d: Days) => {
     setLoading(true);
     fetch(`${PULSE_URL}/v1/dashboard?days=${d}`, { signal: AbortSignal.timeout(4000) })
-      .then((r) => {
-        if (!r.ok) throw new Error("not ok");
-        return r.json();
-      })
-      .then((json) => {
-        setData(json);
-        setOffline(false);
-      })
-      .catch(() => {
-        setData(null);
-        setOffline(true);
-      })
+      .then((r) => { if (!r.ok) throw new Error("not ok"); return r.json(); })
+      .then((json) => { setData(json); setOffline(false); })
+      .catch(() => { setData(null); setOffline(true); })
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => {
-    fetchDashboard(days);
-  }, [fetchDashboard, days]);
-
-  const handleDaysChange = (d: Days) => {
-    setDays(d);
-    fetchDashboard(d);
-  };
+  useEffect(() => { fetchDashboard(days); }, [fetchDashboard, days]);
 
   if (offline) {
     return (
       <div className="page">
-        <div className="page-header">
-          <h1 className="page-title">Analytics</h1>
-        </div>
+        <div className="page-header"><h1 className="page-title">Analytics</h1></div>
         <div className="offline-banner">
           <AlertCircle size={16} />
           <span>Analytics unavailable — pulse is not running.</span>
@@ -84,6 +72,8 @@ export function Analytics() {
       </div>
     );
   }
+
+  const enrichWarn = data?.summary?.brain_enrichment_rate != null && data.summary.brain_enrichment_rate < 0.2;
 
   return (
     <div className="page">
@@ -95,7 +85,7 @@ export function Analytics() {
               key={d}
               className={days === d ? "btn-primary" : "btn-secondary"}
               style={{ padding: "5px 12px", fontSize: 12 }}
-              onClick={() => handleDaysChange(d)}
+              onClick={() => { setDays(d); fetchDashboard(d); }}
             >
               {d}d
             </button>
@@ -110,43 +100,68 @@ export function Analytics() {
         <div className="empty-state">Loading analytics…</div>
       ) : !data ? null : (
         <>
-          {/* Summary cards */}
+          {/* Value metrics */}
           <section className="settings-section">
-            <h2 className="section-title">Summary — last {days} days</h2>
+            <h2 className="section-title">Value — last {days} days</h2>
             <div className="cards-grid">
-              <StatCard
-                icon={<Zap size={16} style={{ color: "var(--accent)" }} />}
-                label="Tool Calls"
-                value={fmt(data.summary?.total_tool_calls)}
-              />
-              <StatCard
-                icon={<Cpu size={16} style={{ color: "var(--warning)" }} />}
-                label="Tokens Saved"
-                value={fmt(data.summary?.tokens_saved)}
-              />
-              <StatCard
-                icon={<Users size={16} style={{ color: "var(--success)" }} />}
-                label="Active Agents"
-                value={String(data.agents?.length ?? 0)}
-              />
+              <StatCard icon={<Zap size={16} style={{ color: "var(--accent)" }} />} label="Tokens Saved" value={fmt(data.summary?.tokens_saved)} sub={data.summary?.savings_pct != null ? `${data.summary.savings_pct.toFixed(1)}% compression` : undefined} />
+              <StatCard icon={<DollarSign size={16} style={{ color: "var(--success)" }} />} label="Cost Saved" value={data.summary?.cost_saved_usd != null ? `$${data.summary.cost_saved_usd.toFixed(2)}` : "—"} />
+              <StatCard icon={<Cpu size={16} style={{ color: "var(--warning)" }} />} label="Tool Calls" value={fmt(data.summary?.total_tool_calls)} />
+              <StatCard icon={<Users size={16} style={{ color: "var(--accent-h)" }} />} label="Sessions" value={fmt(data.summary?.sessions)} />
             </div>
           </section>
 
-          {/* Top tools */}
+          {/* Intent alignment — shown when pulse provides these fields */}
+          {(data.summary?.brain_enrichment_rate != null || data.summary?.task_completion_rate != null || data.summary?.correction_rate != null) && (
+            <section className="settings-section">
+              <h2 className="section-title">Intent Alignment</h2>
+              <div className="cards-grid">
+                {data.summary!.brain_enrichment_rate != null && (
+                  <StatCard
+                    icon={<TrendingUp size={16} style={{ color: enrichWarn ? "var(--warning)" : "var(--success)" }} />}
+                    label="Brain Enrichment"
+                    value={`${(data.summary!.brain_enrichment_rate * 100).toFixed(1)}%`}
+                    sub={enrichWarn ? "⚠ Low — aim for >20%" : "of deliveries enriched"}
+                    warn={enrichWarn}
+                  />
+                )}
+                {data.summary!.task_completion_rate != null && (
+                  <StatCard icon={<BarChart2 size={16} style={{ color: "var(--success)" }} />} label="Task Completion" value={`${(data.summary!.task_completion_rate * 100).toFixed(0)}%`} sub="plans done vs abandoned" />
+                )}
+                {data.summary!.correction_rate != null && (
+                  <StatCard icon={<RefreshCw size={16} style={{ color: "var(--text-muted)" }} />} label="Correction Rate" value={`${(data.summary!.correction_rate * 100).toFixed(1)}%`} sub="re-fetched same entity" />
+                )}
+              </div>
+            </section>
+          )}
+
+          {/* Latency table */}
           {data.tools && data.tools.length > 0 && (
             <section className="settings-section">
-              <h2 className="section-title">Top Tools</h2>
-              <div className="analytics-list">
-                {data.tools.slice(0, 10).map((t: PulseToolStats) => (
-                  <div key={t.name} className="analytics-row">
-                    <span className="analytics-name">
-                      <BarChart2 size={13} style={{ opacity: 0.5 }} />
-                      {t.name}
+              <h2 className="section-title">Tool Latency</h2>
+              <div className="latency-table">
+                <div className="latency-table-header">
+                  <span>Tool</span><span>Calls</span><span>Avg Latency</span><span>Error Rate</span>
+                </div>
+                {data.tools.slice(0, 15).map((t) => (
+                  <div key={t.name} className="latency-table-row">
+                    <span className="latency-name">{t.name}</span>
+                    <span className="latency-calls">{t.calls.toLocaleString()}</span>
+                    <span className="latency-ms" style={{ color: latencyColor(t.avg_ms) }}>
+                      {t.avg_ms != null ? `${t.avg_ms.toFixed(0)}ms` : "—"}
+                      {t.avg_ms != null && t.avg_ms >= 2000 && " ⚠"}
                     </span>
-                    <span className="analytics-count">{t.calls.toLocaleString()}</span>
+                    <span style={{ fontSize: 12, color: (t.error_rate ?? 0) > 0.05 ? "var(--danger)" : "var(--text-muted)" }}>
+                      {t.error_rate != null ? `${(t.error_rate * 100).toFixed(1)}%` : "—"}
+                    </span>
                   </div>
                 ))}
               </div>
+              <p className="settings-hint" style={{ marginTop: 8 }}>
+                <span style={{ color: "var(--success)" }}>Green &lt;500ms</span> ·{" "}
+                <span style={{ color: "var(--warning)" }}>yellow &lt;2s</span> ·{" "}
+                <span style={{ color: "var(--danger)" }}>red ≥2s</span>. Target: get_context &lt;500ms.
+              </p>
             </section>
           )}
 
@@ -163,7 +178,8 @@ export function Analytics() {
                     </span>
                     <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
                       <span className="analytics-meta">{a.sessions} sessions</span>
-                      <span className="analytics-count">{a.tool_calls} calls</span>
+                      <span className="analytics-meta">{fmt(a.tool_calls)} calls</span>
+                      <span className="analytics-count">{fmt(a.tokens_saved)} saved</span>
                     </div>
                   </div>
                 ))}
@@ -180,20 +196,14 @@ export function Analytics() {
   );
 }
 
-function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+function StatCard({ icon, label, value, sub, warn }: { icon: React.ReactNode; label: string; value: string; sub?: string; warn?: boolean }) {
   return (
-    <div className="card">
+    <div className={`card ${warn ? "card-warn" : ""}`}>
       <div className="card-header">
         <div className="card-title">{icon}<span className="service-name" style={{ textTransform: "none" }}>{label}</span></div>
       </div>
-      <div style={{ fontSize: 26, fontWeight: 700, color: "var(--text)" }}>{value}</div>
+      <div style={{ fontSize: 24, fontWeight: 700, color: warn ? "var(--warning)" : "var(--text)" }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: warn ? "var(--warning)" : "var(--text-muted)", marginTop: 4 }}>{sub}</div>}
     </div>
   );
-}
-
-function fmt(n?: number): string {
-  if (n == null) return "—";
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + "K";
-  return n.toLocaleString();
 }

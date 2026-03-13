@@ -1,13 +1,58 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, FolderOpen, Settings, Zap, Brain, BarChart2, Globe } from "lucide-react";
+import {
+  LayoutDashboard,
+  FolderOpen,
+  Users,
+  Brain,
+  Globe,
+  BarChart2,
+  Database,
+  Shield,
+  Settings,
+  Zap,
+} from "lucide-react";
 
-const NAV = [
-  { to: "/", icon: LayoutDashboard, label: "Dashboard" },
-  { to: "/projects", icon: FolderOpen, label: "Projects" },
-  { to: "/models", icon: Brain, label: "Models" },
-  { to: "/analytics", icon: BarChart2, label: "Analytics" },
-  { to: "/scout", icon: Globe, label: "Scout" },
-  { to: "/settings", icon: Settings, label: "Settings" },
+interface NavItem {
+  to: string;
+  icon: React.ElementType;
+  label: string;
+}
+
+interface NavGroup {
+  label: string;
+  items: NavItem[];
+}
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    label: "Control",
+    items: [
+      { to: "/", icon: LayoutDashboard, label: "Dashboard" },
+      { to: "/projects", icon: FolderOpen, label: "Projects" },
+      { to: "/agents", icon: Users, label: "Agents" },
+    ],
+  },
+  {
+    label: "Intelligence",
+    items: [
+      { to: "/models", icon: Brain, label: "Models & Brain" },
+      { to: "/scout", icon: Globe, label: "Scout" },
+    ],
+  },
+  {
+    label: "Observe",
+    items: [
+      { to: "/analytics", icon: BarChart2, label: "Analytics" },
+      { to: "/memory", icon: Database, label: "Memory" },
+    ],
+  },
+  {
+    label: "System",
+    items: [
+      { to: "/privacy", icon: Shield, label: "Privacy & Data" },
+      { to: "/settings", icon: Settings, label: "Settings" },
+    ],
+  },
 ];
 
 export function Sidebar() {
@@ -17,21 +62,32 @@ export function Sidebar() {
         <Zap size={18} className="logo-icon" />
         <span className="logo-text">Synapses</span>
       </div>
-      <ul className="nav-list">
-        {NAV.map(({ to, icon: Icon, label }) => (
-          <li key={to}>
-            <NavLink
-              to={to}
-              end={to === "/"}
-              className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}
-            >
-              <Icon size={15} />
-              <span>{label}</span>
-            </NavLink>
-          </li>
+
+      <div className="nav-groups">
+        {NAV_GROUPS.map((group) => (
+          <div key={group.label} className="nav-group">
+            <div className="nav-section-label">{group.label}</div>
+            <ul className="nav-list">
+              {group.items.map(({ to, icon: Icon, label }) => (
+                <li key={to}>
+                  <NavLink
+                    to={to}
+                    end={to === "/"}
+                    className={({ isActive }) =>
+                      `nav-item ${isActive ? "active" : ""}`
+                    }
+                  >
+                    <Icon size={15} />
+                    <span>{label}</span>
+                  </NavLink>
+                </li>
+              ))}
+            </ul>
+          </div>
         ))}
-      </ul>
-      <div className="sidebar-footer">v0.1.0</div>
+      </div>
+
+      <div className="sidebar-footer">v0.2.0</div>
     </nav>
   );
 }
