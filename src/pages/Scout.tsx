@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Search, Link, AlertCircle, RefreshCw, Globe, Clock, Trash2 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { Search, Link, AlertCircle, RefreshCw, Globe, Clock, Trash2, Play } from "lucide-react";
 
 const SCOUT_URL = "http://localhost:11436";
 
@@ -51,8 +52,22 @@ export function Scout() {
   const [history, setHistory] = useState<CacheEntry[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [renderMd, setRenderMd] = useState(true);
+  const [startingScout, setStartingScout] = useState(false);
 
   const reset = () => { setResult(null); setError(null); setOffline(false); };
+
+  async function startScout() {
+    setStartingScout(true);
+    try {
+      await invoke("restart_service", { name: "scout" });
+      setTimeout(() => {
+        setStartingScout(false);
+        setOffline(false);
+      }, 4000);
+    } catch {
+      setStartingScout(false);
+    }
+  }
 
   async function runSearch(q?: string) {
     const searchQuery = q ?? query;
@@ -132,9 +147,25 @@ export function Scout() {
       </div>
 
       {offline && (
-        <div className="offline-banner" style={{ marginBottom: 24 }}>
-          <AlertCircle size={16} />
-          <span>Scout is not running. Enable it from Dashboard.</span>
+        <div className="brain-offline-card" style={{ marginBottom: 24 }}>
+          <div className="brain-offline-header">
+            <AlertCircle size={18} style={{ color: "var(--warning)" }} />
+            <span>Scout is not running</span>
+          </div>
+          <p style={{ fontSize: 13, color: "var(--text-dim)", margin: "6px 0 10px" }}>
+            Scout is a Python sidecar that fetches and caches web content for your agents.
+            Start it to enable search and URL fetching.
+          </p>
+          <button
+            className="btn-primary"
+            style={{ alignSelf: "flex-start" }}
+            onClick={startScout}
+            disabled={startingScout}
+          >
+            {startingScout
+              ? <><RefreshCw size={13} className="spin" /> Starting…</>
+              : <><Play size={13} /> Start Scout</>}
+          </button>
         </div>
       )}
 
@@ -168,13 +199,13 @@ export function Scout() {
           <div className="pull-row">
             <input
               className="text-input"
-              placeholder="Search the web…"
+              placeholder={offline ? "Start Scout to enable search…" : "Search the web…"}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && runSearch()}
-              disabled={loading}
+              onKeyDown={(e) => e.key === "Enter" && !offline && runSearch()}
+              disabled={loading || offline}
             />
-            <button className="btn-primary" onClick={() => runSearch()} disabled={!query.trim() || loading}>
+            <button className="btn-primary" onClick={() => runSearch()} disabled={!query.trim() || loading || offline}>
               {loading ? <><RefreshCw size={13} className="spin" /> Searching…</> : <><Search size={13} /> Search</>}
             </button>
           </div>
@@ -182,13 +213,13 @@ export function Scout() {
           <div className="pull-row">
             <input
               className="text-input"
-              placeholder="https://…"
+              placeholder={offline ? "Start Scout to enable fetching…" : "https://…"}
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && runFetch()}
-              disabled={loading}
+              onKeyDown={(e) => e.key === "Enter" && !offline && runFetch()}
+              disabled={loading || offline}
             />
-            <button className="btn-primary" onClick={runFetch} disabled={!url.trim() || loading}>
+            <button className="btn-primary" onClick={runFetch} disabled={!url.trim() || loading || offline}>
               {loading ? <><RefreshCw size={13} className="spin" /> Fetching…</> : <><Link size={13} /> Fetch</>}
             </button>
           </div>

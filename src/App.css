@@ -1862,3 +1862,117 @@ html, body, #root {
   color: var(--text-muted);
   line-height: 1.5;
 }
+
+/* ── Brain offline card ────────────────────────────────────────────────────── */
+.brain-offline-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--warning-soft);
+  border: 1px solid rgba(245,158,11,0.2);
+  border-radius: 10px;
+  padding: 16px 18px;
+  gap: 6px;
+}
+.brain-offline-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--warning);
+}
+.brain-offline-step {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.brain-offline-step-ok {
+  color: var(--success);
+}
+
+/* ── Onboarding — Ollama detection card ───────────────────────────────────── */
+.onboarding-detection-card {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.detect-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.detect-checking { color: var(--text-muted); }
+.detect-ok       { color: var(--success); }
+.detect-warn     { color: var(--warning); }
+
+.detect-model-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.detect-model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  padding: 2px 0;
+}
+.detect-model-ok { color: var(--text-muted); }
+
+/* ── Onboarding — Editor connect grid ─────────────────────────────────────── */
+.editor-connect-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  width: 100%;
+  margin-bottom: 4px;
+}
+.editor-connect-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 15px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+}
+.editor-connect-card:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--surface3);
+}
+.editor-connect-done {
+  border-color: var(--success) !important;
+  background: var(--success-soft) !important;
+}
+.editor-connect-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.editor-connect-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.editor-connect-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+}

@@ -265,6 +265,57 @@ fn read_app_settings() -> HashMap<String, serde_json::Value> {
     }
 }
 
+/// Writes the synapses MCP entry into the given editor's config file.
+/// Merges into existing config rather than overwriting.
+/// Returns the path written to.
+#[tauri::command]
+fn write_mcp_config(editor: String) -> Result<String, String> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let home = std::path::PathBuf::from(home);
+
+    let config_path = match editor.as_str() {
+        "claude"    => home.join(".claude").join("settings.json"),
+        "cursor"    => home.join(".cursor").join("mcp.json"),
+        "windsurf"  => home.join(".codeium").join("windsurf").join("mcp_config.json"),
+        "zed"       => home.join(".config").join("zed").join("settings.json"),
+        _           => return Err(format!("Unknown editor: {}", editor)),
+    };
+
+    // Read existing config or start fresh
+    let mut config: serde_json::Value = if config_path.exists() {
+        let content = std::fs::read_to_string(&config_path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    // Create parent dirs if needed
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    let synapses_entry = serde_json::json!({ "command": "synapses", "args": ["start"] });
+
+    if editor == "zed" {
+        // Zed uses "context_servers" with a different shape
+        if !config["context_servers"].is_object() {
+            config["context_servers"] = serde_json::json!({});
+        }
+        config["context_servers"]["synapses"] = serde_json::json!({
+            "command": { "path": "synapses", "args": ["start"] }
+        });
+    } else {
+        if !config["mcpServers"].is_object() {
+            config["mcpServers"] = serde_json::json!({});
+        }
+        config["mcpServers"]["synapses"] = synapses_entry;
+    }
+
+    let content = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
+    std::fs::write(&config_path, content).map_err(|e| e.to_string())?;
+    Ok(config_path.to_string_lossy().to_string())
+}
+
 /// Writes ~/.synapses/app_settings.json
 #[tauri::command]
 fn write_app_settings(settings: HashMap<String, serde_json::Value>) -> Result<(), String> {
@@ -405,6 +456,7 @@ pub fn run() {
             get_log_lines,
             read_app_settings,
             write_app_settings,
+            write_mcp_config,
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();

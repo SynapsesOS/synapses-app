@@ -1,32 +1,57 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Zap, FolderOpen, Brain, Plug, CheckCircle, ArrowRight, Copy, Shield } from "lucide-react";
+import {
+  Zap, FolderOpen, Brain, Plug, CheckCircle, ArrowRight, Shield,
+  AlertCircle, RefreshCw, Code2,
+} from "lucide-react";
 
 interface Props {
   onComplete: () => void;
 }
+
+const EDITORS = [
+  { id: "claude",   label: "Claude Code", hint: "~/.claude/settings.json" },
+  { id: "cursor",   label: "Cursor",      hint: "~/.cursor/mcp.json" },
+  { id: "windsurf", label: "Windsurf",    hint: "~/.codeium/windsurf/mcp_config.json" },
+  { id: "zed",      label: "Zed",         hint: "~/.config/zed/settings.json" },
+];
+
+const SYNAPSES_MODELS = [
+  { name: "synapses/sentry",    desc: "Fast ingest — 397 MB" },
+  { name: "synapses/critic",    desc: "Code review — 986 MB" },
+  { name: "synapses/librarian", desc: "Semantic enrichment — 986 MB" },
+  { name: "synapses/navigator", desc: "Context navigation — 1.3 GB" },
+  { name: "synapses/archivist", desc: "Memory & learning — 1.3 GB" },
+];
 
 export function Onboarding({ onComplete }: Props) {
   const [step, setStep] = useState(0);
   const [indexedPath, setIndexedPath] = useState<string | null>(null);
   const [indexing, setIndexing] = useState(false);
   const [indexOutput, setIndexOutput] = useState("");
-  const [copied, setCopied] = useState(false);
+  const [ollamaStatus, setOllamaStatus] = useState<"checking" | "ok" | "missing">("checking");
+  const [installedModels, setInstalledModels] = useState<string[]>([]);
+  const [writtenEditors, setWrittenEditors] = useState<Record<string, boolean>>({});
+  const [writingEditor, setWritingEditor] = useState<string | null>(null);
 
-  // Privacy defaults
-  const [privacySettings] = useState({
-    log_tool_calls: true,
-    log_sessions: true,
-    cache_web_searches: true,
-  });
+  // Detect Ollama on mount
+  useEffect(() => {
+    fetch("http://localhost:11434/api/tags", { signal: AbortSignal.timeout(3000) })
+      .then((r) => r.json())
+      .then((data) => {
+        const names: string[] = (data.models ?? []).map((m: { name: string }) => m.name);
+        setInstalledModels(names);
+        setOllamaStatus("ok");
+      })
+      .catch(() => setOllamaStatus("missing"));
+  }, []);
 
   async function handleSelectProject() {
     const selected = await open({ directory: true, multiple: false, title: "Select your project directory" });
     if (!selected || typeof selected !== "string") return;
-
     setIndexing(true);
-    setIndexOutput("Indexing your project…");
+    setIndexOutput("Indexing…");
     try {
       const out = await invoke<string>("run_synapses_cmd", { args: ["index", "--path", selected] });
       setIndexedPath(selected);
@@ -38,27 +63,27 @@ export function Onboarding({ onComplete }: Props) {
     }
   }
 
+  async function writeEditorConfig(editorId: string) {
+    setWritingEditor(editorId);
+    try {
+      const path = await invoke<string>("write_mcp_config", { editor: editorId });
+      setWrittenEditors((p) => ({ ...p, [editorId]: true }));
+      console.log("Written to", path);
+    } catch (e) {
+      alert(`Could not write config: ${e}`);
+    } finally {
+      setWritingEditor(null);
+    }
+  }
+
   async function finish() {
-    // Save privacy settings
-    await invoke("write_app_settings", { settings: privacySettings }).catch(() => {});
     await invoke("set_onboarding_done");
     onComplete();
   }
 
-  const mcpSnippet = `{
-  "mcpServers": {
-    "synapses": {
-      "command": "synapses",
-      "args": ["start"]
-    }
-  }
-}`;
-
-  async function copyMcp() {
-    await navigator.clipboard.writeText(mcpSnippet);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }
+  const synapsesModelsInstalled = SYNAPSES_MODELS.filter((m) =>
+    installedModels.some((im) => im.startsWith(m.name.split(":")[0]))
+  ).length;
 
   const steps = [
     // Step 0 — Welcome
@@ -66,12 +91,9 @@ export function Onboarding({ onComplete }: Props) {
       <div className="onboarding-icon"><Zap size={48} /></div>
       <h1 className="onboarding-title">Welcome to Synapses</h1>
       <p className="onboarding-desc">
-        Code intelligence for AI agents. Synapses gives your AI agents a persistent,
+        Code intelligence for AI agents. Synapses gives your agents a persistent,
         structured understanding of your codebase — call graphs, architecture rules,
-        semantic search, session memory, and analytics.
-      </p>
-      <p className="onboarding-desc">
-        Everything runs locally. Your code never leaves your machine.
+        semantic search, session memory, and analytics. Everything runs locally.
       </p>
       <button className="btn-primary btn-large" onClick={() => setStep(1)}>
         Get started <ArrowRight size={16} />
@@ -83,7 +105,7 @@ export function Onboarding({ onComplete }: Props) {
       <div className="onboarding-icon"><FolderOpen size={48} /></div>
       <h1 className="onboarding-title">Index your first project</h1>
       <p className="onboarding-desc">
-        Select a project directory to build a code intelligence graph. Synapses supports
+        Select a project directory to build a code intelligence graph. Supports
         Go, TypeScript, Python, Rust, Java, and 13 more languages.
       </p>
       {!indexedPath ? (
@@ -103,37 +125,86 @@ export function Onboarding({ onComplete }: Props) {
       {indexOutput && <pre className="index-output">{indexOutput}</pre>}
       <div className="step-nav">
         <button className="btn-ghost" onClick={() => setStep(0)}>Back</button>
-        <button
-          className="btn-primary"
-          onClick={() => setStep(2)}
-          disabled={indexing}
-        >
+        <button className="btn-primary" onClick={() => setStep(2)} disabled={indexing}>
           {indexedPath ? "Continue" : "Skip for now"} <ArrowRight size={14} />
         </button>
       </div>
     </div>,
 
-    // Step 2 — Brain (optional)
+    // Step 2 — Brain / Ollama
     <div key="brain" className="onboarding-step">
       <div className="onboarding-icon"><Brain size={48} /></div>
-      <h1 className="onboarding-title">AI Enrichment (optional)</h1>
+      <h1 className="onboarding-title">AI Brain (optional)</h1>
       <p className="onboarding-desc">
-        The <strong>brain</strong> sidecar adds LLM-powered summaries, semantic search,
-        and context enrichment to your code graph. Runs locally via Ollama — your code
-        never leaves your machine.
+        The Brain sidecar adds LLM-powered enrichment — semantic search, code summaries,
+        session memory, and quality gates. It runs fully locally using custom fine-tuned
+        models served by <strong>Ollama</strong>.
       </p>
+
+      {/* Ollama status */}
+      <div className="onboarding-detection-card">
+        {ollamaStatus === "checking" && (
+          <div className="detect-row detect-checking">
+            <RefreshCw size={15} className="spin" />
+            <span>Detecting Ollama…</span>
+          </div>
+        )}
+        {ollamaStatus === "ok" && (
+          <div className="detect-row detect-ok">
+            <CheckCircle size={15} />
+            <span>Ollama detected — {installedModels.length} model{installedModels.length !== 1 ? "s" : ""} installed</span>
+          </div>
+        )}
+        {ollamaStatus === "missing" && (
+          <div className="detect-row detect-warn">
+            <AlertCircle size={15} />
+            <span>Ollama not detected — install from <strong>ollama.com</strong> to use Brain</span>
+          </div>
+        )}
+
+        {ollamaStatus === "ok" && (
+          <div className="detect-model-grid">
+            {SYNAPSES_MODELS.map((m) => {
+              const installed = installedModels.some((im) => im.startsWith(m.name.split(":")[0]));
+              return (
+                <div key={m.name} className={`detect-model-row ${installed ? "detect-model-ok" : ""}`}>
+                  {installed
+                    ? <CheckCircle size={12} style={{ color: "var(--success)", flexShrink: 0 }} />
+                    : <div style={{ width: 12, height: 12, borderRadius: "50%", border: "1.5px solid var(--border)", flexShrink: 0 }} />
+                  }
+                  <code style={{ fontSize: 11 }}>{m.name}</code>
+                  <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: "auto" }}>{m.desc}</span>
+                </div>
+              );
+            })}
+            {synapsesModelsInstalled === 0 && (
+              <p style={{ fontSize: 12, color: "var(--text-dim)", margin: "8px 0 0" }}>
+                Brain will pull these models automatically when first started.
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="option-cards">
         <OptionCard
-          title="Enable brain"
-          desc="Download llama-server + model (~800 MB). Best experience."
+          title="Enable Brain"
+          desc={
+            ollamaStatus === "ok"
+              ? synapsesModelsInstalled > 0
+                ? `Ollama ready · ${synapsesModelsInstalled}/${SYNAPSES_MODELS.length} models installed`
+                : "Ollama ready · models will be pulled on first start"
+              : "Requires Ollama — install from ollama.com first"
+          }
           onClick={async () => {
-            try { await invoke("run_synapses_cmd", { args: ["daemon", "start", "--service", "brain"] }); } catch {}
+            try { await invoke("restart_service", { name: "brain" }); } catch {}
             setStep(3);
           }}
+          disabled={ollamaStatus === "missing"}
         />
         <OptionCard
           title="Skip for now"
-          desc="Synapses works without brain — enable it later from Dashboard."
+          desc="Brain is optional — Synapses works without it. Enable anytime from Models & Brain."
           onClick={() => setStep(3)}
           secondary
         />
@@ -143,65 +214,69 @@ export function Onboarding({ onComplete }: Props) {
       </div>
     </div>,
 
-    // Step 3 — Connect agent
+    // Step 3 — Connect agent (one-click)
     <div key="connect" className="onboarding-step">
       <div className="onboarding-icon"><Plug size={48} /></div>
       <h1 className="onboarding-title">Connect your AI agent</h1>
       <p className="onboarding-desc">
-        Add this config to your AI agent's MCP settings. Works with Claude Code,
-        Cursor, Windsurf, Zed, and any MCP-compatible agent.
+        Click your editor to automatically add Synapses to its MCP config.
+        No copy-pasting needed.
       </p>
-      <div className="code-block">
-        <pre>{mcpSnippet}</pre>
-        <button className="copy-btn" onClick={copyMcp}>
-          {copied ? <CheckCircle size={14} /> : <Copy size={14} />}
-          {copied ? "Copied!" : "Copy"}
-        </button>
+
+      <div className="editor-connect-grid">
+        {EDITORS.map((ed) => {
+          const done = writtenEditors[ed.id];
+          const writing = writingEditor === ed.id;
+          return (
+            <button
+              key={ed.id}
+              className={`editor-connect-card ${done ? "editor-connect-done" : ""}`}
+              onClick={() => !done && writeEditorConfig(ed.id)}
+              disabled={writing}
+            >
+              <div className="editor-connect-top">
+                <Code2 size={18} style={{ color: done ? "var(--success)" : "var(--accent)" }} />
+                <span className="editor-connect-label">{ed.label}</span>
+                {done && <CheckCircle size={14} style={{ color: "var(--success)", marginLeft: "auto" }} />}
+                {writing && <RefreshCw size={14} className="spin" style={{ marginLeft: "auto" }} />}
+              </div>
+              <span className="editor-connect-hint">
+                {done ? "✓ Added to " : "Writes to "}{ed.hint}
+              </span>
+            </button>
+          );
+        })}
       </div>
-      <p className="onboarding-hint">
-        <strong>Claude Code:</strong> Add to <code>~/.claude/settings.json</code><br />
-        <strong>Cursor:</strong> Add to <code>~/.cursor/mcp.json</code>
+
+      <p className="onboarding-hint" style={{ marginTop: 12 }}>
+        Don't see your editor? Add <code>synapses start</code> as an MCP command manually.
       </p>
+
       <div className="step-nav">
         <button className="btn-ghost" onClick={() => setStep(2)}>Back</button>
         <button className="btn-primary" onClick={() => setStep(4)}>
-          Next <ArrowRight size={14} />
+          {Object.keys(writtenEditors).length > 0 ? "Continue" : "Skip for now"} <ArrowRight size={14} />
         </button>
       </div>
     </div>,
 
     // Step 4 — Privacy defaults
     <div key="privacy" className="onboarding-step">
-      <div className="onboarding-icon" style={{ color: "var(--success)", filter: "drop-shadow(0 0 24px rgba(16,185,129,0.3))" }}>
+      <div className="onboarding-icon" style={{ color: "var(--success)" }}>
         <Shield size={48} />
       </div>
       <h1 className="onboarding-title">Your data stays local</h1>
       <p className="onboarding-desc">
         Synapses stores everything on your machine. No cloud sync. No external telemetry.
-        No account required. Here's exactly what gets stored:
+        No account required.
       </p>
       <div className="privacy-checklist">
-        <PrivacyItem
-          checked={true}
-          locked
-          label="Code graph"
-          desc="Your indexed codebase — required for the tool to function"
-        />
-        <PrivacyItem
-          checked={privacySettings.log_tool_calls}
-          locked={false}
-          label="Session logs"
-          desc="Tool call counts and latency for local analytics (no code content)"
-        />
-        <PrivacyItem
-          checked={privacySettings.cache_web_searches}
-          locked={false}
-          label="Web cache"
-          desc="Searches and pages fetched by agents via Scout"
-        />
+        <PrivacyItem checked label="Code graph" desc="Your indexed codebase — required for the tool to function" locked />
+        <PrivacyItem checked label="Session logs" desc="Tool call counts and latency for local analytics (no code content)" />
+        <PrivacyItem checked label="Web cache" desc="Searches and pages fetched by agents via Scout" />
       </div>
       <p className="onboarding-hint" style={{ textAlign: "center", width: "100%" }}>
-        You can change these anytime in <strong>Privacy & Data</strong>.
+        Change these anytime in <strong>Privacy & Data</strong>.
       </p>
       <div className="step-nav">
         <button className="btn-ghost" onClick={() => setStep(3)}>Back</button>
@@ -230,10 +305,7 @@ export function Onboarding({ onComplete }: Props) {
     <div className="onboarding-container">
       <div className="onboarding-progress">
         {steps.map((_, i) => (
-          <div
-            key={i}
-            className={`progress-dot ${i === step ? "active" : i < step ? "done" : ""}`}
-          />
+          <div key={i} className={`progress-dot ${i === step ? "active" : i < step ? "done" : ""}`} />
         ))}
       </div>
       {steps[step]}
@@ -241,16 +313,25 @@ export function Onboarding({ onComplete }: Props) {
   );
 }
 
-function OptionCard({ title, desc, onClick, secondary }: { title: string; desc: string; onClick: () => void; secondary?: boolean }) {
+function OptionCard({
+  title, desc, onClick, secondary, disabled,
+}: {
+  title: string; desc: string; onClick: () => void; secondary?: boolean; disabled?: boolean;
+}) {
   return (
-    <button className={`option-card ${secondary ? "option-card-secondary" : ""}`} onClick={onClick}>
+    <button
+      className={`option-card ${secondary ? "option-card-secondary" : ""}`}
+      onClick={onClick}
+      disabled={disabled}
+      style={disabled ? { opacity: 0.45, cursor: "not-allowed" } : undefined}
+    >
       <div className="option-title">{title}</div>
       <div className="option-desc">{desc}</div>
     </button>
   );
 }
 
-function PrivacyItem({ checked, locked, label, desc }: { checked: boolean; locked: boolean; label: string; desc: string }) {
+function PrivacyItem({ checked, locked, label, desc }: { checked: boolean; locked?: boolean; label: string; desc: string }) {
   return (
     <div className="privacy-check-row">
       <CheckCircle size={16} style={{ color: checked ? "var(--success)" : "var(--text-dim)", flexShrink: 0 }} />

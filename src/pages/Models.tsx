@@ -10,6 +10,7 @@ import {
   ChevronDown,
   ChevronRight,
   Cpu,
+  Play,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useToast } from "../context/ToastContext";
@@ -62,6 +63,8 @@ export function Models() {
   const [ramGb, setRamGb] = useState(0);
   const [ollamaModels, setOllamaModels] = useState(4);
   const [ollamaConfigSaved, setOllamaConfigSaved] = useState(false);
+  const [startingBrain, setStartingBrain] = useState(false);
+  const [ollamaAvailable, setOllamaAvailable] = useState<boolean | null>(null);
   const [brainConfigRaw, setBrainConfigRaw] = useState("");
   const [brainConfigOpen, setBrainConfigOpen] = useState(false);
   const [brainConfigSaving, setBrainConfigSaving] = useState(false);
@@ -91,7 +94,22 @@ export function Models() {
     fetchHealth();
     invoke<number>("get_system_ram_gb").then(setRamGb).catch(() => {});
     invoke<string>("read_brain_config").then(setBrainConfigRaw).catch(() => {});
+    fetch("http://localhost:11434/api/tags", { signal: AbortSignal.timeout(3000) })
+      .then((r) => setOllamaAvailable(r.ok))
+      .catch(() => setOllamaAvailable(false));
   }, [fetchHealth]);
+
+  async function startBrain() {
+    setStartingBrain(true);
+    try {
+      await invoke("restart_service", { name: "brain" });
+      addToast("info", "Brain starting… checking health in 5s");
+      setTimeout(() => { fetchHealth(); setStartingBrain(false); }, 5000);
+    } catch (e) {
+      addToast("error", `Failed to start brain: ${e}`);
+      setStartingBrain(false);
+    }
+  }
 
   const pullModel = async (modelName: string) => {
     if (!modelName.trim()) return;
@@ -244,9 +262,44 @@ export function Models() {
       <section className="settings-section">
         <h2 className="section-title">Brain Tier Health</h2>
         {offline ? (
-          <div className="offline-banner">
-            <AlertCircle size={16} />
-            <span>Brain is offline — start it from Dashboard.</span>
+          <div className="brain-offline-card">
+            <div className="brain-offline-header">
+              <AlertCircle size={18} style={{ color: "var(--warning)" }} />
+              <span>Brain is not running</span>
+            </div>
+            {ollamaAvailable === false && (
+              <div className="brain-offline-step">
+                <strong>Step 1:</strong> Install Ollama from{" "}
+                <a href="https://ollama.com" target="_blank" rel="noreferrer" className="inline-link">
+                  ollama.com
+                </a>{" "}
+                — Brain uses local Ollama models, nothing goes to the cloud.
+              </div>
+            )}
+            {ollamaAvailable === true && (
+              <div className="brain-offline-step brain-offline-step-ok">
+                <CheckCircle size={13} style={{ color: "var(--success)" }} /> Ollama detected
+              </div>
+            )}
+            <div className="brain-offline-step">
+              {ollamaAvailable === false ? <strong>Step 2:</strong> : <strong>Step 1:</strong>}{" "}
+              Start Brain — it will pull the required Synapses models automatically on first run.
+            </div>
+            <button
+              className="btn-primary"
+              style={{ marginTop: 12, alignSelf: "flex-start" }}
+              onClick={startBrain}
+              disabled={startingBrain || ollamaAvailable === false}
+            >
+              {startingBrain
+                ? <><RefreshCw size={13} className="spin" /> Starting…</>
+                : <><Play size={13} /> Start Brain</>}
+            </button>
+            {ollamaAvailable === false && (
+              <p style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 8 }}>
+                Install Ollama first, then come back to start Brain.
+              </p>
+            )}
           </div>
         ) : tiersData ? (
           <div className="tier-table">
