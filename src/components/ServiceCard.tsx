@@ -20,7 +20,6 @@ const STATUS_LABEL: Record<ServiceStatus, string> = {
 
 const SERVICE_DESC: Record<string, string> = {
   synapses: "Code intelligence daemon · port 11435",
-  scout: "Web intelligence · Unix socket",
 };
 
 interface Props {

@@ -16,7 +16,6 @@ import {
 
 const PULSE_URL = "http://localhost:11437";
 const BRAIN_URL = "http://localhost:11435";
-const SCOUT_URL = "http://localhost:11436";
 
 interface PulseAgentStats {
   agent_id: string;
@@ -38,12 +37,6 @@ interface BrainHealth {
   version?: string;
 }
 
-interface ScoutStats {
-  search_count?: number;
-  web_count?: number;
-  total_size_bytes?: number;
-}
-
 function fmt(n?: number): string {
   if (n == null) return "—";
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
@@ -61,7 +54,6 @@ function fmtBytes(b?: number): string {
 export function Memory() {
   const [pulseData, setPulseData] = useState<{ summary?: PulseSummary; agents?: PulseAgentStats[] } | null>(null);
   const [brainHealth, setBrainHealth] = useState<BrainHealth | null>(null);
-  const [scoutStats, setScoutStats] = useState<ScoutStats | null>(null);
   const [dataDir, setDataDir] = useState("~/.synapses");
   const [loading, setLoading] = useState(true);
 
@@ -70,18 +62,15 @@ export function Memory() {
     const dir = await invoke<string>("get_synapses_data_dir").catch(() => "~/.synapses");
     setDataDir(dir);
 
-    const [pulse, brain, scout] = await Promise.allSettled([
+    const [pulse, brain] = await Promise.allSettled([
       fetch(`${PULSE_URL}/v1/dashboard?days=30`, { signal: AbortSignal.timeout(4000) })
         .then((r) => (r.ok ? r.json() : Promise.reject())),
       fetch(`${BRAIN_URL}/v1/health`, { signal: AbortSignal.timeout(3000) })
-        .then((r) => (r.ok ? r.json() : Promise.reject())),
-      fetch(`${SCOUT_URL}/v1/cache/stats`, { signal: AbortSignal.timeout(3000) })
         .then((r) => (r.ok ? r.json() : Promise.reject())),
     ]);
 
     if (pulse.status === "fulfilled") setPulseData(pulse.value);
     if (brain.status === "fulfilled") setBrainHealth(brain.value);
-    if (scout.status === "fulfilled") setScoutStats(scout.value);
 
     setLoading(false);
   }, []);
@@ -151,19 +140,17 @@ export function Memory() {
           icon={<Globe size={16} style={{ color: "var(--success)" }} />}
           title="Web Cache"
           subtitle="External"
-          badge="scout.db"
-          description="Cached web searches and fetched pages. Agents use this via the scout tool. Expires automatically (search=6h, web=24h)."
-          available={scoutStats != null}
+          badge="synapses.db"
+          description="Cached documentation pages and URLs fetched by agents via lookup_docs. Version-pinned Go docs never expire; other URLs expire after 24h."
+          available={true}
         >
-          {scoutStats ? (
-            <div className="memory-stats">
-              <MemoryStat label="Cached Searches" value={fmt(scoutStats.search_count)} />
-              <MemoryStat label="Cached Pages" value={fmt(scoutStats.web_count)} />
-              <MemoryStat label="Cache Size" value={fmtBytes(scoutStats.total_size_bytes)} />
-            </div>
-          ) : (
-            <OfflinePlaceholder service="Scout" port={11436} />
-          )}
+          <div className="memory-note">
+            <BookOpen size={13} />
+            <span>
+              Stored in the <code>web_cache</code> table inside <code>synapses.db</code>.
+              Clear it from the <a href="#/privacy" className="inline-link">Privacy</a> page.
+            </span>
+          </div>
         </MemoryCard>
 
         {/* Code graph memory */}

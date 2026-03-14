@@ -136,7 +136,6 @@ export function Settings() {
         <div className="port-table">
           {[
             { name: "Synapses Daemon", value: "127.0.0.1:11435", desc: "MCP HTTP transport + admin API" },
-            { name: "Scout", value: "Unix socket", desc: "~/.synapses/scout.sock" },
             { name: "Brain API", value: "built-in", desc: "In-process via daemon at /api/brain/..." },
             { name: "Pulse API", value: "built-in", desc: "In-process via daemon at /api/pulse/..." },
           ].map((row) => (

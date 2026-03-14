@@ -116,11 +116,8 @@ impl SidecarManagerInner {
             "synapses".to_string(),
             SidecarState::new("synapses", 11435, "synapses", vec!["daemon", "serve"], "/api/admin/health"),
         );
-        // Scout stays separate (Python, Chromium dependency).
-        // Serves on Unix socket ~/.synapses/scout.sock — no TCP port.
-        let mut scout_state = SidecarState::new("scout", 0, "scout", vec!["serve", "--uds", "~/.synapses/scout.sock"], "/v1/health");
-        scout_state.socket_path = Some("~/.synapses/scout.sock".to_string());
-        sidecars.insert("scout".to_string(), scout_state);
+        // Scout has been removed — web intelligence is built into the synapses binary
+        // via the Go-native webcache module (internal/webcache). No external sidecar needed.
         Self { sidecars }
     }
 

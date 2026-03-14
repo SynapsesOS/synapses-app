@@ -13,13 +13,11 @@ import {
 } from "lucide-react";
 
 const PULSE_URL = "http://localhost:11437";
-const SCOUT_URL = "http://localhost:11436";
 
 interface DataSizes {
   synapses: number;
   pulse: number;
   brain: number;
-  scout: number;
 }
 
 function fmtBytes(b: number): string {
@@ -30,7 +28,7 @@ function fmtBytes(b: number): string {
   return b + " B";
 }
 
-type ClearKey = "scout-search" | "scout-web" | "pulse-sessions" | "brain-enrichments";
+type ClearKey = "web-cache" | "pulse-sessions" | "brain-enrichments";
 type ClearState = "idle" | "clearing" | "done" | "error";
 
 export function Privacy() {
@@ -38,8 +36,7 @@ export function Privacy() {
   const [sizes, setSizes] = useState<DataSizes | null>(null);
   const [loadingSizes, setLoadingSizes] = useState(true);
   const [clearStates, setClearStates] = useState<Record<ClearKey, ClearState>>({
-    "scout-search": "idle",
-    "scout-web": "idle",
+    "web-cache": "idle",
     "pulse-sessions": "idle",
     "brain-enrichments": "idle",
   });
@@ -97,15 +94,8 @@ export function Privacy() {
   async function clearData(key: ClearKey) {
     setClearStates((s) => ({ ...s, [key]: "clearing" }));
     try {
-      if (key === "scout-search" || key === "scout-web") {
-        const mode = key === "scout-search" ? "search" : "web";
-        const res = await fetch(`${SCOUT_URL}/v1/cache/clear`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ type: mode }),
-          signal: AbortSignal.timeout(5000),
-        });
-        if (!res.ok) throw new Error("failed");
+      if (key === "web-cache") {
+        await invoke("run_synapses_cmd", { args: ["cache", "clear"] }).catch(() => { throw new Error("failed"); });
       } else if (key === "pulse-sessions") {
         const res = await fetch(`${PULSE_URL}/v1/sessions`, {
           method: "DELETE",
@@ -131,7 +121,7 @@ export function Privacy() {
   }
 
   const totalBytes = sizes
-    ? sizes.synapses + sizes.pulse + sizes.brain + sizes.scout
+    ? sizes.synapses + sizes.pulse + sizes.brain
     : 0;
 
   return (
@@ -212,23 +202,16 @@ export function Privacy() {
           <DbCard
             icon={<HardDrive size={16} style={{ color: "var(--text-muted)" }} />}
             name="Web Cache"
-            file="scout.db"
-            desc="Cached web searches and fetched pages. Used by agents via the scout tool. Auto-expires."
-            size={sizes?.scout}
-            loading={loadingSizes}
+            file="synapses.db (web_cache table)"
+            desc="Package docs and URLs fetched by agents via lookup_docs. Version-pinned Go docs never expire; other URLs expire after 24h."
+            size={undefined}
+            loading={false}
             actions={
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                <ClearButton
-                  state={clearStates["scout-search"]}
-                  label="Clear searches"
-                  onClear={() => clearData("scout-search")}
-                />
-                <ClearButton
-                  state={clearStates["scout-web"]}
-                  label="Clear web cache"
-                  onClear={() => clearData("scout-web")}
-                />
-              </div>
+              <ClearButton
+                state={clearStates["web-cache"]}
+                label="Clear web cache"
+                onClear={() => clearData("web-cache")}
+              />
             }
           />
         </div>
@@ -280,7 +263,7 @@ export function Privacy() {
           />
           <PrivacyToggle
             label="Web search cache"
-            desc="Caches search queries and fetched pages in scout.db to avoid re-fetching."
+            desc="Caches fetched documentation pages and URLs in synapses.db to avoid re-fetching across sessions."
             checked={settings.cache_web_searches}
             onChange={() => toggleSetting("cache_web_searches")}
           />
@@ -296,7 +279,7 @@ export function Privacy() {
             "Synapses does not have a cloud backend",
             "No analytics are sent to Anthropic, GitHub, or any third party",
             "AI enrichment runs locally via Ollama — your code is not sent to any LLM API",
-            "Web searches via Scout use DuckDuckGo by default (no account, no tracking)",
+            "Web cache uses only URLs you or your agents explicitly fetch — no background crawling",
             "You can inspect, export, or delete all stored data at any time",
           ].map((item) => (
             <div key={item} className="privacy-guarantee-row">

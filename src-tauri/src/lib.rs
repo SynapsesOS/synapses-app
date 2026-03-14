@@ -141,9 +141,9 @@ fn get_data_sizes() -> HashMap<String, u64> {
     let data_dir = sidecar::synapses_data_dir();
     // brain.db and pulse.db no longer exist — brain and pulse are in-process
     // within the singleton daemon binary since the Phase 3–5 architecture merge.
+    // web_cache is now a table inside synapses.db — no separate scout.db
     let files = [
         ("synapses", "synapses.db"),
-        ("scout", "scout.db"),
     ];
     let mut result = HashMap::new();
     for (key, filename) in &files {
@@ -550,74 +550,6 @@ async fn pull_model(model: String, app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-// ── Scout download ────────────────────────────────────────────────────────────
-
-/// Downloads the Scout binary for the current platform from GitHub Releases
-/// and installs it to ~/.synapses/bin/scout.
-/// Emits "scout-download-progress" (0–100) and "scout-download-done" { success, error? }.
-#[tauri::command]
-async fn download_scout(app: AppHandle) -> Result<(), String> {
-    use futures_util::StreamExt;
-
-    let triple = match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("macos", "aarch64") => "darwin-arm64",
-        ("macos", "x86_64")  => "darwin-amd64",
-        ("linux", "x86_64")  => "linux-amd64",
-        (os, arch) => return Err(format!("Unsupported platform: {os}-{arch}")),
-    };
-
-    let url = format!(
-        "https://github.com/SynapsesOS/synapses-scout/releases/latest/download/scout-{triple}"
-    );
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(300))
-        .build()
-        .unwrap_or_default();
-
-    let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
-    if !response.status().is_success() {
-        let msg = format!("Download failed: {}", response.status());
-        let _ = app.emit("scout-download-done", serde_json::json!({ "success": false, "error": msg }));
-        return Err(msg);
-    }
-
-    let total = response.content_length().unwrap_or(0);
-    let mut downloaded: u64 = 0;
-    let mut stream = response.bytes_stream();
-
-    let bin_dir = sidecar::synapses_data_dir().join("bin");
-    std::fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
-    let dest = bin_dir.join("scout");
-    let tmp = bin_dir.join("scout.tmp");
-
-    let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
-    use std::io::Write;
-
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| e.to_string())?;
-        file.write_all(&chunk).map_err(|e| e.to_string())?;
-        downloaded += chunk.len() as u64;
-        if total > 0 {
-            let pct = (downloaded * 100 / total) as u8;
-            let _ = app.emit("scout-download-progress", pct);
-        }
-    }
-    drop(file);
-
-    std::fs::rename(&tmp, &dest).map_err(|e| e.to_string())?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&dest).map_err(|e| e.to_string())?.permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&dest, perms).map_err(|e| e.to_string())?;
-    }
-
-    let _ = app.emit("scout-download-done", serde_json::json!({ "success": true }));
-    Ok(())
-}
 
 // ── App update check ──────────────────────────────────────────────────────────
 
@@ -878,7 +810,6 @@ pub fn run() {
             register_launch_agent,
             check_ollama,
             pull_model,
-            download_scout,
             check_for_update,
             install_update,
         ])
