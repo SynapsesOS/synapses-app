@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { BarChart2, Zap, Cpu, Users, RefreshCw, AlertCircle, DollarSign, TrendingUp } from "lucide-react";
 
-// Pulse telemetry is now in-process within the daemon (no HTTP endpoint yet).
-// Analytics data is not available via HTTP in this version.
-const PULSE_URL = "http://localhost:11434/api/pulse";
+// Pulse telemetry is in-process within the daemon at port 11435.
+const PULSE_URL = "http://localhost:11435/api/pulse";
 
 interface PulseSummary {
   total_tool_calls?: number;

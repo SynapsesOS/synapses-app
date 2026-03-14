@@ -17,7 +17,7 @@ function makeMcpConfig(agentId: string) {
       {
         context_servers: {
           synapses: {
-            settings: { url: "http://127.0.0.1:11434/mcp" },
+            settings: { url: "http://127.0.0.1:11435/mcp" },
           },
         },
       },
@@ -30,7 +30,7 @@ function makeMcpConfig(agentId: string) {
       mcpServers: {
         synapses: {
           transport: "http",
-          url: "http://127.0.0.1:11434/mcp",
+          url: "http://127.0.0.1:11435/mcp",
           ...(agentId === "generic" ? { description: "Synapses code intelligence MCP server" } : {}),
         },
       },
@@ -135,7 +135,7 @@ export function Settings() {
         <h2 className="section-title">Service Ports</h2>
         <div className="port-table">
           {[
-            { name: "Synapses Daemon", value: "127.0.0.1:11434", desc: "MCP HTTP transport + admin API" },
+            { name: "Synapses Daemon", value: "127.0.0.1:11435", desc: "MCP HTTP transport + admin API" },
             { name: "Scout", value: "Unix socket", desc: "~/.synapses/scout.sock" },
             { name: "Brain API", value: "built-in", desc: "In-process via daemon at /api/brain/..." },
             { name: "Pulse API", value: "built-in", desc: "In-process via daemon at /api/pulse/..." },

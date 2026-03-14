@@ -9,12 +9,8 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { useToast } from "../context/ToastContext";
 
-// Brain is now in-process within the daemon — no standalone HTTP API.
-// Ollama's default port 11434 is now occupied by the Synapses daemon.
-// Configure Ollama to run on a different port and update this constant,
-// or expose the Ollama URL via get_app_settings from the daemon config.
-// TODO: read OLLAMA_URL from daemon config via a get_app_settings Tauri command.
-const OLLAMA_URL = "http://localhost:11435";
+// Ollama runs on its default port 11434; synapses daemon is on 11435.
+const OLLAMA_URL = "http://localhost:11434";
 
 const CURATED_MODELS = [
   { name: "qwen2.5-coder:1.5b", desc: "Default — fast, ~800 MB RAM", recommended: true },
