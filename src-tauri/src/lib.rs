@@ -90,8 +90,29 @@ async fn stop_service(name: String, state: State<'_, AppSidecarManager>) -> Resu
 }
 
 #[tauri::command]
-fn enable_service(name: String, state: State<AppSidecarManager>) {
-    state.0.lock().unwrap().set_enabled(&name, true);
+async fn enable_service(name: String, state: State<'_, AppSidecarManager>) -> Result<(), String> {
+    let (binary, args) = {
+        let mut mgr = state.0.lock().unwrap();
+        mgr.set_enabled(&name, true);
+        mgr.get_binary_and_args(&name)
+            .ok_or_else(|| format!("Unknown service: {}", name))?
+    };
+
+    let bin_path = find_binary(&binary)
+        .ok_or_else(|| format!("Binary '{}' not found on PATH or ~/.synapses/bin", binary))?;
+
+    let mut cmd = std::process::Command::new(&bin_path);
+    for arg in &args {
+        cmd.arg(arg);
+    }
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    let child = cmd.spawn().map_err(|e| format!("Failed to start {}: {}", name, e))?;
+    let pid = child.id();
+    state.0.lock().unwrap().sidecars.get_mut(&name).map(|s| s.pid = Some(pid));
+    Ok(())
 }
 
 // ── Tauri commands — synapses CLI ─────────────────────────────────────────────

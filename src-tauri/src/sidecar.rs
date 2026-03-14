@@ -190,6 +190,9 @@ impl SidecarManagerInner {
             s.enabled = enabled;
             if !enabled {
                 s.status = ServiceStatus::Disabled;
+            } else {
+                s.status = ServiceStatus::Starting;
+                s.consecutive_failures = 0;
             }
         }
     }
