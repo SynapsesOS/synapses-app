@@ -14,8 +14,8 @@ import {
   Layers,
 } from "lucide-react";
 
-const PULSE_URL = "http://localhost:11437";
-const BRAIN_URL = "http://localhost:11435";
+// Pulse analytics are in-process — served at the daemon's admin API
+const PULSE_SUMMARY_URL = "http://localhost:11435/api/admin/pulse/summary";
 
 interface PulseAgentStats {
   agent_id: string;
@@ -30,13 +30,6 @@ interface PulseSummary {
   tokens_saved?: number;
 }
 
-interface BrainHealth {
-  status: string;
-  model?: string;
-  enriched_nodes?: number;
-  version?: string;
-}
-
 function fmt(n?: number): string {
   if (n == null) return "—";
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
@@ -44,16 +37,8 @@ function fmt(n?: number): string {
   return n.toLocaleString();
 }
 
-function fmtBytes(b?: number): string {
-  if (b == null || b === 0) return "—";
-  if (b >= 1024 * 1024) return (b / (1024 * 1024)).toFixed(1) + " MB";
-  if (b >= 1024) return (b / 1024).toFixed(1) + " KB";
-  return b + " B";
-}
-
 export function Memory() {
   const [pulseData, setPulseData] = useState<{ summary?: PulseSummary; agents?: PulseAgentStats[] } | null>(null);
-  const [brainHealth, setBrainHealth] = useState<BrainHealth | null>(null);
   const [dataDir, setDataDir] = useState("~/.synapses");
   const [loading, setLoading] = useState(true);
 
@@ -62,15 +47,12 @@ export function Memory() {
     const dir = await invoke<string>("get_synapses_data_dir").catch(() => "~/.synapses");
     setDataDir(dir);
 
-    const [pulse, brain] = await Promise.allSettled([
-      fetch(`${PULSE_URL}/v1/dashboard?days=30`, { signal: AbortSignal.timeout(4000) })
-        .then((r) => (r.ok ? r.json() : Promise.reject())),
-      fetch(`${BRAIN_URL}/v1/health`, { signal: AbortSignal.timeout(3000) })
+    const [pulse] = await Promise.allSettled([
+      fetch(`${PULSE_SUMMARY_URL}?days=30`, { signal: AbortSignal.timeout(4000) })
         .then((r) => (r.ok ? r.json() : Promise.reject())),
     ]);
 
     if (pulse.status === "fulfilled") setPulseData(pulse.value);
-    if (brain.status === "fulfilled") setBrainHealth(brain.value);
 
     setLoading(false);
   }, []);
@@ -109,7 +91,7 @@ export function Memory() {
               <MemoryStat label="Active Agents" value={fmt(pulseData.agents?.length)} />
             </div>
           ) : (
-            <OfflinePlaceholder service="Pulse" port={11437} />
+            <OfflinePlaceholder service="Pulse (daemon)" port={11435} />
           )}
         </MemoryCard>
 
@@ -119,20 +101,15 @@ export function Memory() {
           title="AI Enrichments"
           subtitle="Semantic"
           badge="brain.db"
-          description="LLM-generated summaries of your code nodes, produced locally by Ollama. Enriched nodes get faster, better context delivery."
-          available={brainHealth != null}
+          description="LLM-generated summaries of your code nodes, produced locally by Ollama. Enable in synapses.json to get richer context delivery."
+          available={true}
         >
-          {brainHealth ? (
-            <div className="memory-stats">
-              <MemoryStat label="Status" value={brainHealth.status} />
-              <MemoryStat label="Active Model" value={brainHealth.model ?? "—"} />
-              {brainHealth.enriched_nodes != null && (
-                <MemoryStat label="Enriched Nodes" value={fmt(brainHealth.enriched_nodes)} />
-              )}
-            </div>
-          ) : (
-            <OfflinePlaceholder service="Brain" port={11435} />
-          )}
+          <div className="memory-note">
+            <BookOpen size={13} />
+            <span>
+              In-process inside the daemon. Enable with <code>{'"brain": {"enabled": true}'}</code> in your project's <code>synapses.json</code>.
+            </span>
+          </div>
         </MemoryCard>
 
         {/* Web cache */}

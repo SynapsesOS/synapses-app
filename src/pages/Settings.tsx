@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Copy, CheckCircle, FolderOpen, Terminal, RefreshCw, Plug } from "lucide-react";
+import { Copy, CheckCircle, FolderOpen, Terminal, RefreshCw, Plug, AlertCircle } from "lucide-react";
 import { useToast } from "../context/ToastContext";
 
 const AGENTS = [
@@ -51,9 +51,14 @@ export function Settings() {
   const [activeAgent, setActiveAgent] = useState("claude");
   const [connected, setConnected] = useState<Record<string, boolean>>({});
   const [connecting, setConnecting] = useState<string | null>(null);
+  const [daemonRunning, setDaemonRunning] = useState<boolean | null>(null);
 
   useEffect(() => {
     invoke<string>("get_synapses_data_dir").then(setDataDir).catch(() => {});
+    // Check if daemon is reachable
+    fetch("http://127.0.0.1:11435/api/admin/health", { signal: AbortSignal.timeout(2000) })
+      .then((r) => setDaemonRunning(r.ok))
+      .catch(() => setDaemonRunning(false));
   }, []);
 
   async function connectAgent(agentId: string) {
@@ -61,9 +66,9 @@ export function Settings() {
     try {
       const path = await invoke<string>("write_mcp_config", { editor: agentId });
       setConnected((p) => ({ ...p, [agentId]: true }));
-      addToast("success", `Config written to ${path}`);
+      addToast("success", `Config written to ${path} — restart your agent to apply`);
     } catch (e) {
-      addToast("error", `Failed: ${e}`);
+      addToast("error", `Failed to write config: ${e}`);
     } finally {
       setConnecting(null);
     }
@@ -114,8 +119,16 @@ export function Settings() {
       <section className="settings-section">
         <h2 className="section-title">Connect Your AI Agent</h2>
         <p className="section-desc">
-          One click to write the MCP config directly into your agent's settings file.
+          Writes the Synapses MCP server into your agent's global config file.
+          After connecting, open any indexed project in your agent — Synapses serves context automatically.
         </p>
+
+        {daemonRunning === false && (
+          <div className="offline-banner" style={{ marginBottom: 12 }}>
+            <AlertCircle size={14} />
+            <span>Daemon is offline — start it from the Dashboard before connecting your agent.</span>
+          </div>
+        )}
 
         {/* Agent tabs */}
         <div className="agent-tabs">
@@ -131,7 +144,7 @@ export function Settings() {
           ))}
         </div>
 
-        {activeAgentInfo.configPath && (
+        {activeAgentInfo.configPath ? (
           <button
             className="btn-primary"
             style={{ marginTop: 14, width: "100%" }}
@@ -146,7 +159,7 @@ export function Settings() {
               <><Plug size={14} /> Connect {activeAgentInfo.label}</>
             )}
           </button>
-        )}
+        ) : null}
 
         <div className="code-block" style={{ marginTop: 12 }}>
           <pre>{mcpConfig}</pre>
@@ -158,31 +171,11 @@ export function Settings() {
 
         {activeAgentInfo.configPath ? (
           <p className="settings-hint">
-            Writes to: <code>{activeAgentInfo.configPath}</code> — merges with existing config, never overwrites.
+            Writes to: <code>{activeAgentInfo.configPath}</code> — merges with existing config, never overwrites other entries.
           </p>
         ) : (
           <p className="settings-hint">Copy the snippet above and add it to your agent's MCP config manually.</p>
         )}
-      </section>
-
-      {/* Service ports */}
-      <section className="settings-section">
-        <h2 className="section-title">Service Ports</h2>
-        <div className="port-table">
-          {[
-            { name: "Synapses Daemon", value: "127.0.0.1:11435", desc: "MCP HTTP transport + admin API" },
-            { name: "Brain API", value: "built-in", desc: "In-process via daemon at /api/brain/..." },
-            { name: "Pulse API", value: "built-in", desc: "In-process via daemon at /api/pulse/..." },
-          ].map((row) => (
-            <div key={row.name} className="port-row">
-              <div>
-                <span className="port-name">{row.name}</span>
-                <span className="port-desc">{row.desc}</span>
-              </div>
-              <code className="port-value">{row.value}</code>
-            </div>
-          ))}
-        </div>
       </section>
 
       {/* Data directory */}
@@ -235,7 +228,7 @@ export function Settings() {
         )}
         {logLines.length === 0 && !logLoading && (
           <p className="settings-hint" style={{ marginTop: 8 }}>
-            Log file location: <code>{dataDir || "~/.synapses"}/logs/synapses.log</code>
+            Log file: <code>{dataDir || "~/.synapses"}/logs/synapses.log</code>
           </p>
         )}
       </section>
@@ -250,7 +243,7 @@ export function Settings() {
           </div>
           <div className="about-row">
             <span className="about-label">Protocol</span>
-            <span className="about-value">MCP (Model Context Protocol)</span>
+            <span className="about-value">MCP over HTTP · 127.0.0.1:11435/mcp</span>
           </div>
           <div className="about-row">
             <span className="about-label">Storage</span>
