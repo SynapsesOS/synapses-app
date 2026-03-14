@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Copy, CheckCircle, FolderOpen, Terminal, RefreshCw } from "lucide-react";
+import { Copy, CheckCircle, FolderOpen, Terminal, RefreshCw, Plug } from "lucide-react";
 import { useToast } from "../context/ToastContext";
 
 const AGENTS = [
@@ -49,10 +49,25 @@ export function Settings() {
   const [logLines, setLogLines] = useState<string[]>([]);
   const [logLoading, setLogLoading] = useState(false);
   const [activeAgent, setActiveAgent] = useState("claude");
+  const [connected, setConnected] = useState<Record<string, boolean>>({});
+  const [connecting, setConnecting] = useState<string | null>(null);
 
   useEffect(() => {
     invoke<string>("get_synapses_data_dir").then(setDataDir).catch(() => {});
   }, []);
+
+  async function connectAgent(agentId: string) {
+    setConnecting(agentId);
+    try {
+      const path = await invoke<string>("write_mcp_config", { editor: agentId });
+      setConnected((p) => ({ ...p, [agentId]: true }));
+      addToast("success", `Config written to ${path}`);
+    } catch (e) {
+      addToast("error", `Failed: ${e}`);
+    } finally {
+      setConnecting(null);
+    }
+  }
 
   async function copyText(text: string, key: string) {
     await navigator.clipboard.writeText(text);
@@ -99,7 +114,7 @@ export function Settings() {
       <section className="settings-section">
         <h2 className="section-title">Connect Your AI Agent</h2>
         <p className="section-desc">
-          Add the MCP config to your agent's settings to connect it to Synapses.
+          One click to write the MCP config directly into your agent's settings file.
         </p>
 
         {/* Agent tabs */}
@@ -111,9 +126,27 @@ export function Settings() {
               onClick={() => setActiveAgent(a.id)}
             >
               {a.label}
+              {connected[a.id] && <CheckCircle size={11} style={{ marginLeft: 4, color: "var(--success)" }} />}
             </button>
           ))}
         </div>
+
+        {activeAgentInfo.configPath && (
+          <button
+            className="btn-primary"
+            style={{ marginTop: 14, width: "100%" }}
+            disabled={connecting === activeAgent}
+            onClick={() => connectAgent(activeAgent)}
+          >
+            {connected[activeAgent] ? (
+              <><CheckCircle size={14} /> Connected — click to re-apply</>
+            ) : connecting === activeAgent ? (
+              <><RefreshCw size={14} className="spin" /> Writing config…</>
+            ) : (
+              <><Plug size={14} /> Connect {activeAgentInfo.label}</>
+            )}
+          </button>
+        )}
 
         <div className="code-block" style={{ marginTop: 12 }}>
           <pre>{mcpConfig}</pre>
@@ -123,10 +156,12 @@ export function Settings() {
           </button>
         </div>
 
-        {activeAgentInfo.configPath && (
+        {activeAgentInfo.configPath ? (
           <p className="settings-hint">
-            Config file: <code>{activeAgentInfo.configPath}</code>
+            Writes to: <code>{activeAgentInfo.configPath}</code> — merges with existing config, never overwrites.
           </p>
+        ) : (
+          <p className="settings-hint">Copy the snippet above and add it to your agent's MCP config manually.</p>
         )}
       </section>
 
