@@ -17,17 +17,11 @@ import {
 // Pulse analytics are in-process — served at the daemon's admin API
 const PULSE_SUMMARY_URL = "http://localhost:11435/api/admin/pulse/summary";
 
-interface PulseAgentStats {
-  agent_id: string;
-  sessions: number;
-  tool_calls: number;
-  tokens_saved: number;
-}
-
 interface PulseSummary {
   sessions?: number;
   total_tool_calls?: number;
   tokens_saved?: number;
+  tasks_completed?: number;
 }
 
 function fmt(n?: number): string {
@@ -38,7 +32,7 @@ function fmt(n?: number): string {
 }
 
 export function Memory() {
-  const [pulseData, setPulseData] = useState<{ summary?: PulseSummary; agents?: PulseAgentStats[] } | null>(null);
+  const [pulseData, setPulseData] = useState<{ summary?: PulseSummary } | null>(null);
   const [dataDir, setDataDir] = useState("~/.synapses");
   const [loading, setLoading] = useState(true);
 
@@ -88,10 +82,10 @@ export function Memory() {
               <MemoryStat label="Sessions (30d)" value={fmt(pulseData.summary?.sessions)} />
               <MemoryStat label="Tool Calls" value={fmt(pulseData.summary?.total_tool_calls)} />
               <MemoryStat label="Tokens Saved" value={fmt(pulseData.summary?.tokens_saved)} />
-              <MemoryStat label="Active Agents" value={fmt(pulseData.agents?.length)} />
+              <MemoryStat label="Tasks Completed" value={fmt(pulseData.summary?.tasks_completed)} />
             </div>
           ) : (
-            <OfflinePlaceholder service="Pulse (daemon)" port={11435} />
+            <OfflinePlaceholder />
           )}
         </MemoryCard>
 
@@ -260,11 +254,11 @@ function MemoryStat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function OfflinePlaceholder({ service, port }: { service: string; port: number }) {
+function OfflinePlaceholder() {
   return (
     <div className="memory-offline">
       <AlertCircle size={13} />
-      <span>{service} offline (port {port}) — start it from Dashboard</span>
+      <span>Daemon offline — start Synapses from the Dashboard</span>
     </div>
   );
 }
