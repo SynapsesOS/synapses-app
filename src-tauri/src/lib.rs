@@ -308,10 +308,10 @@ fn write_mcp_config(editor: String) -> Result<String, String> {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
-    // HTTP MCP transport: daemon runs at 127.0.0.1:11434 and serves /mcp.
+    // HTTP MCP transport: daemon runs at 127.0.0.1:11435 and serves /mcp.
     let synapses_entry = serde_json::json!({
         "transport": "http",
-        "url": "http://127.0.0.1:11434/mcp"
+        "url": "http://127.0.0.1:11435/mcp"
     });
 
     if editor == "zed" {
@@ -320,7 +320,7 @@ fn write_mcp_config(editor: String) -> Result<String, String> {
             config["context_servers"] = serde_json::json!({});
         }
         config["context_servers"]["synapses"] = serde_json::json!({
-            "settings": { "url": "http://127.0.0.1:11434/mcp" }
+            "settings": { "url": "http://127.0.0.1:11435/mcp" }
         });
     } else {
         if !config["mcpServers"].is_object() {
@@ -457,7 +457,7 @@ fn register_launch_agent() -> Result<(), String> {
 // ── Ollama detection ──────────────────────────────────────────────────────────
 
 /// Checks if Ollama is reachable and returns its version + installed model names.
-/// Ollama is expected on port 11435 (11434 is taken by the Synapses daemon).
+/// Ollama runs on its default port 11434; synapses daemon is on 11435.
 #[tauri::command]
 async fn check_ollama() -> Result<serde_json::Value, String> {
     let client = reqwest::Client::builder()
@@ -466,7 +466,7 @@ async fn check_ollama() -> Result<serde_json::Value, String> {
         .unwrap_or_default();
 
     // Check version
-    let version_res = client.get("http://localhost:11435/api/version").send().await;
+    let version_res = client.get("http://localhost:11434/api/version").send().await;
     let version = match version_res {
         Ok(r) if r.status().is_success() => {
             r.json::<serde_json::Value>().await
@@ -478,7 +478,7 @@ async fn check_ollama() -> Result<serde_json::Value, String> {
     };
 
     // List installed models
-    let models: Vec<String> = match client.get("http://localhost:11435/api/tags").send().await {
+    let models: Vec<String> = match client.get("http://localhost:11434/api/tags").send().await {
         Ok(r) => match r.json::<serde_json::Value>().await {
             Ok(v) => v["models"].as_array()
                 .map(|arr| arr.iter()
@@ -511,7 +511,7 @@ async fn pull_model(model: String, app: AppHandle) -> Result<(), String> {
 
     let body = serde_json::json!({ "model": model, "stream": true });
     let response = client
-        .post("http://localhost:11435/api/pull")
+        .post("http://localhost:11434/api/pull")
         .json(&body)
         .send()
         .await
@@ -773,9 +773,9 @@ async fn health_watch_loop(app: AppHandle, mgr: SidecarManager) {
 /// Ensures the singleton daemon is running. Called on app launch before the health loop.
 /// If daemon is already healthy, returns immediately. Otherwise spawns it.
 async fn ensure_daemon_started(app: AppHandle, mgr: SidecarManager) {
-    if check_health(11434, DAEMON_HEALTH_PATH).await {
+    if check_health(11435, DAEMON_HEALTH_PATH).await {
         // Already running — adopt it.
-        let existing_pid = pid_for_port(11434);
+        let existing_pid = pid_for_port(11435);
         let mut m = mgr.lock().unwrap();
         m.record_success("synapses");
         if let Some(s) = m.sidecars.get_mut("synapses") {
@@ -815,7 +815,7 @@ async fn ensure_daemon_started(app: AppHandle, mgr: SidecarManager) {
             // Poll until healthy (up to 30s).
             for _ in 0..60 {
                 sleep(Duration::from_millis(500)).await;
-                if check_health(11434, DAEMON_HEALTH_PATH).await {
+                if check_health(11435, DAEMON_HEALTH_PATH).await {
                     let mut m = mgr.lock().unwrap();
                     m.record_success("synapses");
                     if let Some(s) = m.sidecars.get_mut("synapses") {

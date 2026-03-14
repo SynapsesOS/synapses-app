@@ -114,7 +114,7 @@ impl SidecarManagerInner {
         // Brain and pulse are now in-process within the daemon binary.
         sidecars.insert(
             "synapses".to_string(),
-            SidecarState::new("synapses", 11434, "synapses", vec!["daemon", "serve"], "/api/admin/health"),
+            SidecarState::new("synapses", 11435, "synapses", vec!["daemon", "serve"], "/api/admin/health"),
         );
         // Scout stays separate (Python, Chromium dependency).
         // Serves on Unix socket ~/.synapses/scout.sock — no TCP port.

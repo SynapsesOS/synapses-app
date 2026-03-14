@@ -248,12 +248,7 @@ export function Onboarding({ onComplete }: Props) {
       <p className="onboarding-desc">
         Synapses includes a built-in AI brain that adds LLM-powered enrichment —
         semantic search, code summaries, and session memory. It runs fully locally
-        {/* NOTE: Synapses daemon occupies port 11434 (Ollama's default).
-            Ollama must be configured to run on port 11435 instead:
-              OLLAMA_HOST=127.0.0.1:11435 ollama serve
-            TODO: long-term fix — move synapses daemon off 11434 so Ollama
-            can keep its default port. */}
-        using <strong>Ollama</strong> on port 11435.
+        using <strong>Ollama</strong> on its default port (11434).
       </p>
 
       <div className="onboarding-detection-card">
@@ -272,7 +267,7 @@ export function Onboarding({ onComplete }: Props) {
         {ollamaStatus === "missing" && (
           <div className="detect-row detect-warn">
             <AlertCircle size={15} />
-            <span>Ollama not found — install from <strong>ollama.com</strong> and configure it on port 11435</span>
+            <span>Ollama not found — install from <strong>ollama.com</strong> and start it normally</span>
           </div>
         )}
 
@@ -433,7 +428,7 @@ export function Onboarding({ onComplete }: Props) {
       </div>
 
       <p className="onboarding-hint" style={{ marginTop: 12 }}>
-        Don't see your editor? Add <code>{`{ "transport": "http", "url": "http://127.0.0.1:11434/mcp" }`}</code> manually.
+        Don't see your editor? Add <code>{`{ "transport": "http", "url": "http://127.0.0.1:11435/mcp" }`}</code> manually.
       </p>
 
       <div className="step-nav">
