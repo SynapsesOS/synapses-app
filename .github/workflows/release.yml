@@ -1,0 +1,121 @@
+name: Release
+
+# Triggered when a version tag is pushed to synapses-app.
+# Prerequisite: the matching tag must already be released in SynapsesOS/synapses
+# (the daemon repo) so that gh release download can fetch the pre-built binaries.
+# Release order: synapses → synapses-app (push the same vX.Y.Z tag to both repos)
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build app (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: macos-arm64
+            tauri_target: aarch64-apple-darwin
+            daemon_asset: synapses_darwin_arm64.tar.gz
+            daemon_binary: synapses-aarch64-apple-darwin
+          - os: macos-latest
+            platform: macos-x86_64
+            tauri_target: x86_64-apple-darwin
+            daemon_asset: synapses_darwin_x86_64.tar.gz
+            daemon_binary: synapses-x86_64-apple-darwin
+          - os: ubuntu-latest
+            platform: linux-x86_64
+            tauri_target: x86_64-unknown-linux-gnu
+            daemon_asset: synapses_linux_x86_64.tar.gz
+            daemon_binary: synapses-x86_64-unknown-linux-gnu
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.tauri_target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # Download the pre-built daemon binary from SynapsesOS/synapses release.
+      # The synapses release uses the same vX.Y.Z tag — publish it first.
+      - name: Download synapses daemon binary
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download ${{ github.ref_name }} \
+            --repo SynapsesOS/synapses \
+            --pattern "${{ matrix.daemon_asset }}" \
+            --dir /tmp/daemon
+          tar -xzf /tmp/daemon/${{ matrix.daemon_asset }} -C /tmp/daemon synapses
+          mv /tmp/daemon/synapses src-tauri/resources/${{ matrix.daemon_binary }}
+          chmod +x src-tauri/resources/${{ matrix.daemon_binary }}
+
+      # macOS: sign the daemon binary before Tauri bundles it
+      - name: Sign daemon binary (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p actions actions.keychain
+          security default-keychain -s actions.keychain
+          security unlock-keychain -p actions actions.keychain
+          security import certificate.p12 -k actions.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k actions actions.keychain
+          codesign --force --options runtime \
+            --sign "Developer ID Application: $APPLE_TEAM_ID" \
+            src-tauri/resources/${{ matrix.daemon_binary }}
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Synapses ${{ github.ref_name }}"
+          releaseBody: |
+            ## What's new
+            See [CHANGELOG.md](https://github.com/SynapsesOS/synapses-app/blob/main/CHANGELOG.md) for details.
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.tauri_target }}

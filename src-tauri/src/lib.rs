@@ -3,12 +3,14 @@ mod sidecar;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_updater::UpdaterExt;
 use tokio::time::sleep;
 
 use sidecar::{check_health, check_unix_health, find_binary, kill_by_port, pid_for_port, pid_for_socket, SidecarInfo, SidecarManager, SidecarManagerInner, ServiceStatus};
 
 const DAEMON_HEALTH_PATH: &str = "/api/admin/health";
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // ── State types ──────────────────────────────────────────────────────────────
 
@@ -23,20 +25,30 @@ fn get_service_status(state: State<AppSidecarManager>) -> Vec<SidecarInfo> {
 
 #[tauri::command]
 async fn restart_service(name: String, state: State<'_, AppSidecarManager>) -> Result<String, String> {
-    let (binary, args, port) = {
+    let (binary, args, port, tracked_pid) = {
         let mgr = state.0.lock().unwrap();
         let (bin, a) = mgr.get_binary_and_args(&name)
             .ok_or_else(|| format!("Unknown service: {}", name))?;
         let port = mgr.sidecars.get(&name).map(|s| s.port).unwrap_or(0);
-        (bin, a, port)
+        let pid = mgr.sidecars.get(&name).and_then(|s| s.pid);
+        (bin, a, port, pid)
     };
 
     let bin_path = find_binary(&binary)
         .ok_or_else(|| format!("Binary '{}' not found on PATH or ~/.synapses/bin", binary))?;
 
-    // Kill anything on the port — catches both tracked PID and externally started processes
-    kill_by_port(port);
-    // Small grace period for the port to release
+    // Socket-based services (port=0) are killed by stored PID;
+    // TCP services are killed by port to catch any stray process.
+    if port == 0 {
+        if let Some(pid) = tracked_pid {
+            let _ = std::process::Command::new("kill")
+                .args(["-TERM", &pid.to_string()])
+                .status();
+        }
+    } else {
+        kill_by_port(port);
+    }
+    // Small grace period for the process to release the port/socket
     std::thread::sleep(std::time::Duration::from_millis(300));
 
     let mut cmd = std::process::Command::new(&bin_path);
@@ -127,10 +139,10 @@ fn set_onboarding_done() {
 #[tauri::command]
 fn get_data_sizes() -> HashMap<String, u64> {
     let data_dir = sidecar::synapses_data_dir();
+    // brain.db and pulse.db no longer exist — brain and pulse are in-process
+    // within the singleton daemon binary since the Phase 3–5 architecture merge.
     let files = [
         ("synapses", "synapses.db"),
-        ("pulse", "pulse.db"),
-        ("brain", "brain.db"),
         ("scout", "scout.db"),
     ];
     let mut result = HashMap::new();
@@ -296,15 +308,19 @@ fn write_mcp_config(editor: String) -> Result<String, String> {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
-    let synapses_entry = serde_json::json!({ "command": "synapses", "args": ["start"] });
+    // HTTP MCP transport: daemon runs at 127.0.0.1:11434 and serves /mcp.
+    let synapses_entry = serde_json::json!({
+        "transport": "http",
+        "url": "http://127.0.0.1:11434/mcp"
+    });
 
     if editor == "zed" {
-        // Zed uses "context_servers" with a different shape
+        // Zed uses "context_servers" with settings.url for HTTP servers
         if !config["context_servers"].is_object() {
             config["context_servers"] = serde_json::json!({});
         }
         config["context_servers"]["synapses"] = serde_json::json!({
-            "command": { "path": "synapses", "args": ["start"] }
+            "settings": { "url": "http://127.0.0.1:11434/mcp" }
         });
     } else {
         if !config["mcpServers"].is_object() {
@@ -324,6 +340,309 @@ fn write_app_settings(settings: HashMap<String, serde_json::Value>) -> Result<()
     let path = sidecar::synapses_data_dir().join("app_settings.json");
     let content = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     std::fs::write(&path, content).map_err(|e| e.to_string())
+}
+
+// ── Bundled daemon extraction ─────────────────────────────────────────────────
+
+/// Extracts the platform-specific synapses binary from the app bundle's Resources/
+/// into ~/.synapses/bin/synapses on first launch (or when the app version changes).
+/// Called silently before any UI appears.
+fn extract_bundled_daemon(app: &AppHandle) -> Result<(), String> {
+    let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
+
+    let triple = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("macos", "x86_64")  => "x86_64-apple-darwin",
+        ("linux", "x86_64")  => "x86_64-unknown-linux-gnu",
+        (os, arch) => return Err(format!("Unsupported platform: {os}-{arch}")),
+    };
+
+    let bundled = resource_dir.join(format!("synapses-{triple}"));
+    // Skip if the file doesn't exist or is a 0-byte dev stub.
+    // CI places the real binary here before `tauri build`; local dev has an empty placeholder.
+    let bundled_size = std::fs::metadata(&bundled).map(|m| m.len()).unwrap_or(0);
+    if bundled_size == 0 {
+        return Ok(());
+    }
+
+    let bin_dir = sidecar::synapses_data_dir().join("bin");
+    std::fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
+
+    let dest = bin_dir.join("synapses");
+    let version_marker = bin_dir.join("synapses.app_version");
+
+    // Re-extract if binary is missing or was bundled with a different app version.
+    let current_marker = std::fs::read_to_string(&version_marker).unwrap_or_default();
+    if dest.exists() && current_marker.trim() == APP_VERSION {
+        return Ok(());
+    }
+
+    std::fs::copy(&bundled, &dest).map_err(|e| format!("Failed to extract daemon: {e}"))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&dest).map_err(|e| e.to_string())?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&dest, perms).map_err(|e| e.to_string())?;
+    }
+
+    std::fs::write(&version_marker, APP_VERSION).ok();
+    Ok(())
+}
+
+// ── LaunchAgent registration (macOS) ─────────────────────────────────────────
+
+/// Registers a launchd LaunchAgent so the daemon starts automatically on login.
+/// Writes ~/.synapses/com.synapsesos.daemon.plist and loads it.
+/// Safe to call multiple times — only writes+loads if the plist changed.
+#[tauri::command]
+fn register_launch_agent() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        let bin = sidecar::synapses_data_dir().join("bin").join("synapses");
+        let bin_str = bin.to_string_lossy();
+        let log_dir = sidecar::synapses_data_dir().join("logs");
+        std::fs::create_dir_all(&log_dir).ok();
+        let log_str = log_dir.join("daemon.log").to_string_lossy().to_string();
+
+        let plist = format!(r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.synapsesos.daemon</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{bin_str}</string>
+        <string>daemon</string>
+        <string>serve</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{log_str}</string>
+    <key>StandardErrorPath</key>
+    <string>{log_str}</string>
+</dict>
+</plist>
+"#);
+
+        let agents_dir = std::path::PathBuf::from(&home).join("Library/LaunchAgents");
+        std::fs::create_dir_all(&agents_dir).ok();
+        let plist_path = agents_dir.join("com.synapsesos.daemon.plist");
+
+        // Only reload if the content changed.
+        let existing = std::fs::read_to_string(&plist_path).unwrap_or_default();
+        if existing != plist {
+            std::fs::write(&plist_path, &plist).map_err(|e| e.to_string())?;
+            // Unload old (ignore errors if not loaded) then load fresh.
+            let _ = std::process::Command::new("launchctl")
+                .args(["unload", &plist_path.to_string_lossy()])
+                .status();
+            std::process::Command::new("launchctl")
+                .args(["load", "-w", &plist_path.to_string_lossy()])
+                .status()
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+// ── Ollama detection ──────────────────────────────────────────────────────────
+
+/// Checks if Ollama is reachable and returns its version + installed model names.
+/// Ollama is expected on port 11435 (11434 is taken by the Synapses daemon).
+#[tauri::command]
+async fn check_ollama() -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .unwrap_or_default();
+
+    // Check version
+    let version_res = client.get("http://localhost:11435/api/version").send().await;
+    let version = match version_res {
+        Ok(r) if r.status().is_success() => {
+            r.json::<serde_json::Value>().await
+                .ok()
+                .and_then(|v| v["version"].as_str().map(String::from))
+                .unwrap_or_else(|| "unknown".to_string())
+        }
+        _ => return Ok(serde_json::json!({ "running": false })),
+    };
+
+    // List installed models
+    let models: Vec<String> = match client.get("http://localhost:11435/api/tags").send().await {
+        Ok(r) => match r.json::<serde_json::Value>().await {
+            Ok(v) => v["models"].as_array()
+                .map(|arr| arr.iter()
+                    .filter_map(|m| m["name"].as_str().map(String::from))
+                    .collect())
+                .unwrap_or_default(),
+            Err(_) => vec![],
+        },
+        Err(_) => vec![],
+    };
+
+    Ok(serde_json::json!({
+        "running": true,
+        "version": version,
+        "models": models,
+    }))
+}
+
+/// Pulls an Ollama model, emitting progress events to the frontend.
+/// Events: "ollama-pull-progress" with payload { model, status, completed, total }
+/// Final event: "ollama-pull-done" with payload { model, success, error? }
+#[tauri::command]
+async fn pull_model(model: String, app: AppHandle) -> Result<(), String> {
+    use futures_util::StreamExt;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(600))
+        .build()
+        .unwrap_or_default();
+
+    let body = serde_json::json!({ "model": model, "stream": true });
+    let response = client
+        .post("http://localhost:11435/api/pull")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        let msg = format!("Ollama returned {}", response.status());
+        let _ = app.emit("ollama-pull-done", serde_json::json!({ "model": model, "success": false, "error": msg }));
+        return Err(msg);
+    }
+
+    let mut stream = response.bytes_stream();
+    let mut buf = String::new();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| e.to_string())?;
+        buf.push_str(&String::from_utf8_lossy(&chunk));
+
+        // Ollama streams newline-delimited JSON
+        while let Some(nl) = buf.find('\n') {
+            let line = buf[..nl].trim().to_string();
+            buf = buf[nl + 1..].to_string();
+            if line.is_empty() { continue; }
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
+                let _ = app.emit("ollama-pull-progress", serde_json::json!({
+                    "model": model,
+                    "status": val["status"],
+                    "completed": val["completed"],
+                    "total": val["total"],
+                }));
+            }
+        }
+    }
+
+    let _ = app.emit("ollama-pull-done", serde_json::json!({ "model": model, "success": true }));
+    Ok(())
+}
+
+// ── Scout download ────────────────────────────────────────────────────────────
+
+/// Downloads the Scout binary for the current platform from GitHub Releases
+/// and installs it to ~/.synapses/bin/scout.
+/// Emits "scout-download-progress" (0–100) and "scout-download-done" { success, error? }.
+#[tauri::command]
+async fn download_scout(app: AppHandle) -> Result<(), String> {
+    use futures_util::StreamExt;
+
+    let triple = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "darwin-arm64",
+        ("macos", "x86_64")  => "darwin-amd64",
+        ("linux", "x86_64")  => "linux-amd64",
+        (os, arch) => return Err(format!("Unsupported platform: {os}-{arch}")),
+    };
+
+    let url = format!(
+        "https://github.com/SynapsesOS/synapses-scout/releases/latest/download/scout-{triple}"
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(300))
+        .build()
+        .unwrap_or_default();
+
+    let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        let msg = format!("Download failed: {}", response.status());
+        let _ = app.emit("scout-download-done", serde_json::json!({ "success": false, "error": msg }));
+        return Err(msg);
+    }
+
+    let total = response.content_length().unwrap_or(0);
+    let mut downloaded: u64 = 0;
+    let mut stream = response.bytes_stream();
+
+    let bin_dir = sidecar::synapses_data_dir().join("bin");
+    std::fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
+    let dest = bin_dir.join("scout");
+    let tmp = bin_dir.join("scout.tmp");
+
+    let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+    use std::io::Write;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| e.to_string())?;
+        file.write_all(&chunk).map_err(|e| e.to_string())?;
+        downloaded += chunk.len() as u64;
+        if total > 0 {
+            let pct = (downloaded * 100 / total) as u8;
+            let _ = app.emit("scout-download-progress", pct);
+        }
+    }
+    drop(file);
+
+    std::fs::rename(&tmp, &dest).map_err(|e| e.to_string())?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&dest).map_err(|e| e.to_string())?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&dest, perms).map_err(|e| e.to_string())?;
+    }
+
+    let _ = app.emit("scout-download-done", serde_json::json!({ "success": true }));
+    Ok(())
+}
+
+// ── App update check ──────────────────────────────────────────────────────────
+
+/// Checks GitHub Releases for a new version of the Synapses app.
+/// Returns { available: bool, version?: string, notes?: string }
+#[tauri::command]
+async fn check_for_update(app: AppHandle) -> Result<serde_json::Value, String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    match updater.check().await {
+        Ok(Some(update)) => Ok(serde_json::json!({
+            "available": true,
+            "version": update.version,
+            "current": update.current_version,
+        })),
+        Ok(None) => Ok(serde_json::json!({ "available": false })),
+        Err(e) => Ok(serde_json::json!({ "available": false, "error": e.to_string() })),
+    }
+}
+
+/// Downloads and installs the pending app update. Call after check_for_update returns available=true.
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    if let Some(update) = updater.check().await.map_err(|e| e.to_string())? {
+        update.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 // ── Health watcher loop ───────────────────────────────────────────────────────
@@ -520,6 +839,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppSidecarManager(mgr.clone()))
         .invoke_handler(tauri::generate_handler![
             // Services
@@ -544,9 +864,27 @@ pub fn run() {
             read_app_settings,
             write_app_settings,
             write_mcp_config,
+            // Install & update
+            register_launch_agent,
+            check_ollama,
+            pull_model,
+            download_scout,
+            check_for_update,
+            install_update,
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
+
+            // Extract bundled synapses binary to ~/.synapses/bin/ silently before any UI.
+            if let Err(e) = extract_bundled_daemon(&app_handle) {
+                eprintln!("synapses-app: could not extract bundled daemon: {e}");
+            }
+
+            // Register LaunchAgent so daemon survives app restarts (macOS).
+            if let Err(e) = register_launch_agent() {
+                eprintln!("synapses-app: could not register launch agent: {e}");
+            }
+
             let mgr_clone = mgr.clone();
             tauri::async_runtime::spawn(async move {
                 // Ensure singleton daemon is running before starting health watch.

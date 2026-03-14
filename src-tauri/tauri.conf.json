@@ -35,11 +35,23 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": []
+    "externalBin": [],
+    "resources": {
+      "resources/synapses-aarch64-apple-darwin": "synapses-aarch64-apple-darwin",
+      "resources/synapses-x86_64-apple-darwin": "synapses-x86_64-apple-darwin",
+      "resources/synapses-x86_64-unknown-linux-gnu": "synapses-x86_64-unknown-linux-gnu"
+    }
   },
   "plugins": {
     "shell": {
       "open": true
+    },
+    "updater": {
+      "pubkey": "PLACEHOLDER_ED25519_PUBKEY",
+      "endpoints": [
+        "https://github.com/SynapsesOS/synapses-app/releases/latest/download/latest.json"
+      ],
+      "dialog": false
     }
   }
 }

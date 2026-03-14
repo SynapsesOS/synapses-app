@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
-  Zap, FolderOpen, Brain, Plug, CheckCircle, ArrowRight, Shield,
-  AlertCircle, RefreshCw, Code2,
+  Zap, FolderOpen, Brain, Plug, Globe, CheckCircle, ArrowRight, Shield,
+  AlertCircle, RefreshCw, Code2, Download,
 } from "lucide-react";
 
 interface Props {
@@ -25,27 +26,119 @@ const SYNAPSES_MODELS = [
   { name: "synapses/archivist", desc: "Memory & learning — 1.3 GB" },
 ];
 
+interface OllamaStatus {
+  running: boolean;
+  version?: string;
+  models?: string[];
+}
+
+interface PullProgress {
+  model: string;
+  status: string;
+  completed?: number;
+  total?: number;
+}
+
 export function Onboarding({ onComplete }: Props) {
   const [step, setStep] = useState(0);
+
+  // Step 1 — Index
   const [indexedPath, setIndexedPath] = useState<string | null>(null);
   const [indexing, setIndexing] = useState(false);
   const [indexOutput, setIndexOutput] = useState("");
+
+  // Step 2 — Ollama / Brain
   const [ollamaStatus, setOllamaStatus] = useState<"checking" | "ok" | "missing">("checking");
-  const [installedModels, setInstalledModels] = useState<string[]>([]);
+  const [ollamaInfo, setOllamaInfo] = useState<OllamaStatus>({ running: false });
+  const [pullingModels, setPullingModels] = useState<Record<string, PullProgress>>({});
+  const [pulledModels, setPulledModels] = useState<Set<string>>(new Set());
+  const unsubPullProgress = useRef<(() => void) | null>(null);
+  const unsubPullDone = useRef<(() => void) | null>(null);
+
+  // Step 3 — Scout
+  const [scoutInstalled, setScoutInstalled] = useState<boolean | null>(null);
+  const [scoutDownloading, setScoutDownloading] = useState(false);
+  const [scoutProgress, setScoutProgress] = useState(0);
+
+  // Step 4 — Connect editor
   const [writtenEditors, setWrittenEditors] = useState<Record<string, boolean>>({});
   const [writingEditor, setWritingEditor] = useState<string | null>(null);
 
-  // Detect Ollama on mount
+  // Check Ollama on mount
   useEffect(() => {
-    fetch("http://localhost:11434/api/tags", { signal: AbortSignal.timeout(3000) })
-      .then((r) => r.json())
-      .then((data) => {
-        const names: string[] = (data.models ?? []).map((m: { name: string }) => m.name);
-        setInstalledModels(names);
-        setOllamaStatus("ok");
-      })
-      .catch(() => setOllamaStatus("missing"));
+    checkOllama();
   }, []);
+
+  // Check if scout binary exists
+  useEffect(() => {
+    invoke<string>("get_synapses_data_dir").then((dir) => {
+      // Try to invoke get_service_status and look for scout with healthy status
+      invoke<{ name: string; status: string }[]>("get_service_status").then((services) => {
+        const scout = services.find((s) => s.name === "scout");
+        setScoutInstalled(scout?.status === "healthy");
+      }).catch(() => setScoutInstalled(false));
+    });
+  }, []);
+
+  async function checkOllama() {
+    setOllamaStatus("checking");
+    try {
+      const info = await invoke<OllamaStatus>("check_ollama");
+      setOllamaInfo(info);
+      setOllamaStatus(info.running ? "ok" : "missing");
+    } catch {
+      setOllamaStatus("missing");
+    }
+  }
+
+  // Subscribe to model pull events
+  async function subscribeToModelEvents() {
+    const u1 = await listen<PullProgress>("ollama-pull-progress", (e) => {
+      setPullingModels((prev) => ({ ...prev, [e.payload.model]: e.payload }));
+    });
+    const u2 = await listen<{ model: string; success: boolean }>("ollama-pull-done", (e) => {
+      if (e.payload.success) {
+        setPulledModels((prev) => new Set([...prev, e.payload.model]));
+      }
+      setPullingModels((prev) => {
+        const next = { ...prev };
+        delete next[e.payload.model];
+        return next;
+      });
+    });
+    unsubPullProgress.current = u1;
+    unsubPullDone.current = u2;
+  }
+
+  useEffect(() => {
+    return () => {
+      unsubPullProgress.current?.();
+      unsubPullDone.current?.();
+    };
+  }, []);
+
+  async function pullModel(name: string) {
+    await subscribeToModelEvents();
+    invoke("pull_model", { model: name }).catch(() => {
+      setPullingModels((prev) => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
+    });
+  }
+
+  async function pullAllModels() {
+    await subscribeToModelEvents();
+    for (const m of SYNAPSES_MODELS) {
+      const alreadyInstalled = (ollamaInfo.models ?? []).some((im) =>
+        im.startsWith(m.name.split(":")[0])
+      );
+      if (!alreadyInstalled && !pulledModels.has(m.name)) {
+        invoke("pull_model", { model: m.name }).catch(() => {});
+      }
+    }
+  }
 
   async function handleSelectProject() {
     const selected = await open({ directory: true, multiple: false, title: "Select your project directory" });
@@ -63,12 +156,28 @@ export function Onboarding({ onComplete }: Props) {
     }
   }
 
+  async function handleDownloadScout() {
+    setScoutDownloading(true);
+    setScoutProgress(0);
+    const u = await listen<number>("scout-download-progress", (e) => setScoutProgress(e.payload));
+    const u2 = await listen<{ success: boolean; error?: string }>("scout-download-done", (e) => {
+      setScoutDownloading(false);
+      setScoutInstalled(e.payload.success);
+      u();
+      u2();
+    });
+    invoke("download_scout").catch(() => {
+      setScoutDownloading(false);
+      u();
+      u2();
+    });
+  }
+
   async function writeEditorConfig(editorId: string) {
     setWritingEditor(editorId);
     try {
-      const path = await invoke<string>("write_mcp_config", { editor: editorId });
+      await invoke<string>("write_mcp_config", { editor: editorId });
       setWrittenEditors((p) => ({ ...p, [editorId]: true }));
-      console.log("Written to", path);
     } catch (e) {
       alert(`Could not write config: ${e}`);
     } finally {
@@ -81,8 +190,9 @@ export function Onboarding({ onComplete }: Props) {
     onComplete();
   }
 
+  const installedModels = ollamaInfo.models ?? [];
   const synapsesModelsInstalled = SYNAPSES_MODELS.filter((m) =>
-    installedModels.some((im) => im.startsWith(m.name.split(":")[0]))
+    installedModels.some((im) => im.startsWith(m.name.split(":")[0])) || pulledModels.has(m.name)
   ).length;
 
   const steps = [
@@ -131,17 +241,21 @@ export function Onboarding({ onComplete }: Props) {
       </div>
     </div>,
 
-    // Step 2 — Brain / Ollama
+    // Step 2 — Brain / Ollama (optional)
     <div key="brain" className="onboarding-step">
       <div className="onboarding-icon"><Brain size={48} /></div>
-      <h1 className="onboarding-title">AI Brain (optional)</h1>
+      <h1 className="onboarding-title">AI Intelligence (optional)</h1>
       <p className="onboarding-desc">
-        The Brain sidecar adds LLM-powered enrichment — semantic search, code summaries,
-        session memory, and quality gates. It runs fully locally using custom fine-tuned
-        models served by <strong>Ollama</strong>.
+        Synapses includes a built-in AI brain that adds LLM-powered enrichment —
+        semantic search, code summaries, and session memory. It runs fully locally
+        {/* NOTE: Synapses daemon occupies port 11434 (Ollama's default).
+            Ollama must be configured to run on port 11435 instead:
+              OLLAMA_HOST=127.0.0.1:11435 ollama serve
+            TODO: long-term fix — move synapses daemon off 11434 so Ollama
+            can keep its default port. */}
+        using <strong>Ollama</strong> on port 11435.
       </p>
 
-      {/* Ollama status */}
       <div className="onboarding-detection-card">
         {ollamaStatus === "checking" && (
           <div className="detect-row detect-checking">
@@ -152,69 +266,139 @@ export function Onboarding({ onComplete }: Props) {
         {ollamaStatus === "ok" && (
           <div className="detect-row detect-ok">
             <CheckCircle size={15} />
-            <span>Ollama detected — {installedModels.length} model{installedModels.length !== 1 ? "s" : ""} installed</span>
+            <span>Ollama {ollamaInfo.version} detected — {installedModels.length} model{installedModels.length !== 1 ? "s" : ""} installed</span>
           </div>
         )}
         {ollamaStatus === "missing" && (
           <div className="detect-row detect-warn">
             <AlertCircle size={15} />
-            <span>Ollama not detected — install from <strong>ollama.com</strong> to use Brain</span>
+            <span>Ollama not found — install from <strong>ollama.com</strong> and configure it on port 11435</span>
           </div>
         )}
 
         {ollamaStatus === "ok" && (
           <div className="detect-model-grid">
             {SYNAPSES_MODELS.map((m) => {
-              const installed = installedModels.some((im) => im.startsWith(m.name.split(":")[0]));
+              const installed = installedModels.some((im) => im.startsWith(m.name.split(":")[0])) || pulledModels.has(m.name);
+              const pulling = pullingModels[m.name];
               return (
                 <div key={m.name} className={`detect-model-row ${installed ? "detect-model-ok" : ""}`}>
                   {installed
                     ? <CheckCircle size={12} style={{ color: "var(--success)", flexShrink: 0 }} />
+                    : pulling
+                    ? <RefreshCw size={12} className="spin" style={{ flexShrink: 0 }} />
                     : <div style={{ width: 12, height: 12, borderRadius: "50%", border: "1.5px solid var(--border)", flexShrink: 0 }} />
                   }
                   <code style={{ fontSize: 11 }}>{m.name}</code>
-                  <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: "auto" }}>{m.desc}</span>
+                  <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: "auto" }}>
+                    {pulling
+                      ? pulling.total
+                        ? `${Math.round((pulling.completed ?? 0) / pulling.total * 100)}%`
+                        : pulling.status
+                      : m.desc}
+                  </span>
+                  {!installed && !pulling && (
+                    <button
+                      className="btn-ghost"
+                      style={{ padding: "1px 6px", fontSize: 10, marginLeft: 6 }}
+                      onClick={() => pullModel(m.name)}
+                    >
+                      Pull
+                    </button>
+                  )}
                 </div>
               );
             })}
-            {synapsesModelsInstalled === 0 && (
-              <p style={{ fontSize: 12, color: "var(--text-dim)", margin: "8px 0 0" }}>
-                Brain will pull these models automatically when first started.
-              </p>
+            {synapsesModelsInstalled < SYNAPSES_MODELS.length && Object.keys(pullingModels).length === 0 && (
+              <button
+                className="btn-secondary btn-sm"
+                style={{ marginTop: 10, alignSelf: "flex-start" }}
+                onClick={pullAllModels}
+              >
+                <Download size={12} /> Pull all models
+              </button>
             )}
           </div>
         )}
       </div>
 
-      <div className="option-cards">
-        <OptionCard
-          title="Enable Brain"
-          desc={
-            ollamaStatus === "ok"
-              ? synapsesModelsInstalled > 0
-                ? `Ollama ready · ${synapsesModelsInstalled}/${SYNAPSES_MODELS.length} models installed`
-                : "Ollama ready · models will be pulled on first start"
-              : "Requires Ollama — install from ollama.com first"
-          }
-          onClick={async () => {
-            try { await invoke("restart_service", { name: "brain" }); } catch {}
-            setStep(3);
-          }}
-          disabled={ollamaStatus === "missing"}
-        />
-        <OptionCard
-          title="Skip for now"
-          desc="Brain is optional — Synapses works without it. Enable anytime from Models & Brain."
-          onClick={() => setStep(3)}
-          secondary
-        />
-      </div>
       <div className="step-nav">
         <button className="btn-ghost" onClick={() => setStep(1)}>Back</button>
+        <button className="btn-primary" onClick={() => setStep(3)}>
+          {ollamaStatus === "ok" ? "Continue" : "Skip for now"} <ArrowRight size={14} />
+        </button>
       </div>
     </div>,
 
-    // Step 3 — Connect agent (one-click)
+    // Step 3 — Scout (optional)
+    <div key="scout" className="onboarding-step">
+      <div className="onboarding-icon"><Globe size={48} /></div>
+      <h1 className="onboarding-title">Web Intelligence (optional)</h1>
+      <p className="onboarding-desc">
+        Scout lets your AI agents search the web, fetch documentation, and watch YouTube
+        videos — all locally, with a built-in cache. It runs as a background service.
+      </p>
+
+      <div className="onboarding-detection-card">
+        {scoutInstalled === null && (
+          <div className="detect-row detect-checking">
+            <RefreshCw size={15} className="spin" />
+            <span>Checking Scout…</span>
+          </div>
+        )}
+        {scoutInstalled === true && (
+          <div className="detect-row detect-ok">
+            <CheckCircle size={15} />
+            <span>Scout is running</span>
+          </div>
+        )}
+        {scoutInstalled === false && !scoutDownloading && (
+          <div className="detect-row detect-warn">
+            <AlertCircle size={15} />
+            <span>Scout not installed</span>
+          </div>
+        )}
+        {scoutDownloading && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div className="detect-row detect-checking">
+              <RefreshCw size={15} className="spin" />
+              <span>Downloading Scout… {scoutProgress}%</span>
+            </div>
+            <div style={{ height: 4, background: "var(--border)", borderRadius: 2 }}>
+              <div style={{ width: `${scoutProgress}%`, height: "100%", background: "var(--accent)", borderRadius: 2, transition: "width 0.2s" }} />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {scoutInstalled === false && (
+        <div className="option-cards">
+          <OptionCard
+            title="Install Scout"
+            desc="Downloads the Scout binary (~60 MB). Enables web search and doc fetching for your agents."
+            onClick={handleDownloadScout}
+            disabled={scoutDownloading}
+          />
+          <OptionCard
+            title="Skip for now"
+            desc="Web intelligence is optional. Synapses works fully without it."
+            onClick={() => setStep(4)}
+            secondary
+          />
+        </div>
+      )}
+
+      <div className="step-nav">
+        <button className="btn-ghost" onClick={() => setStep(2)}>Back</button>
+        {scoutInstalled !== false && (
+          <button className="btn-primary" onClick={() => setStep(4)}>
+            Continue <ArrowRight size={14} />
+          </button>
+        )}
+      </div>
+    </div>,
+
+    // Step 4 — Connect agent
     <div key="connect" className="onboarding-step">
       <div className="onboarding-icon"><Plug size={48} /></div>
       <h1 className="onboarding-title">Connect your AI agent</h1>
@@ -249,18 +433,18 @@ export function Onboarding({ onComplete }: Props) {
       </div>
 
       <p className="onboarding-hint" style={{ marginTop: 12 }}>
-        Don't see your editor? Add <code>synapses start</code> as an MCP command manually.
+        Don't see your editor? Add <code>{`{ "transport": "http", "url": "http://127.0.0.1:11434/mcp" }`}</code> manually.
       </p>
 
       <div className="step-nav">
-        <button className="btn-ghost" onClick={() => setStep(2)}>Back</button>
-        <button className="btn-primary" onClick={() => setStep(4)}>
+        <button className="btn-ghost" onClick={() => setStep(3)}>Back</button>
+        <button className="btn-primary" onClick={() => setStep(5)}>
           {Object.keys(writtenEditors).length > 0 ? "Continue" : "Skip for now"} <ArrowRight size={14} />
         </button>
       </div>
     </div>,
 
-    // Step 4 — Privacy defaults
+    // Step 5 — Privacy
     <div key="privacy" className="onboarding-step">
       <div className="onboarding-icon" style={{ color: "var(--success)" }}>
         <Shield size={48} />
@@ -279,14 +463,14 @@ export function Onboarding({ onComplete }: Props) {
         Change these anytime in <strong>Privacy & Data</strong>.
       </p>
       <div className="step-nav">
-        <button className="btn-ghost" onClick={() => setStep(3)}>Back</button>
-        <button className="btn-primary" onClick={() => setStep(5)}>
+        <button className="btn-ghost" onClick={() => setStep(4)}>Back</button>
+        <button className="btn-primary" onClick={() => setStep(6)}>
           Continue <ArrowRight size={14} />
         </button>
       </div>
     </div>,
 
-    // Step 5 — Done
+    // Step 6 — Done
     <div key="done" className="onboarding-step">
       <div className="onboarding-icon success-glow"><CheckCircle size={48} /></div>
       <h1 className="onboarding-title">You're all set!</h1>
