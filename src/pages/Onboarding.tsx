@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
-  Zap, FolderOpen, Brain, Plug, Globe, CheckCircle, ArrowRight, Shield,
+  Zap, FolderOpen, Brain, Plug, CheckCircle, ArrowRight, Shield,
   AlertCircle, RefreshCw, Code2, Download,
 } from "lucide-react";
 
@@ -55,29 +55,13 @@ export function Onboarding({ onComplete }: Props) {
   const unsubPullProgress = useRef<(() => void) | null>(null);
   const unsubPullDone = useRef<(() => void) | null>(null);
 
-  // Step 3 — Scout
-  const [scoutInstalled, setScoutInstalled] = useState<boolean | null>(null);
-  const [scoutDownloading, setScoutDownloading] = useState(false);
-  const [scoutProgress, setScoutProgress] = useState(0);
-
-  // Step 4 — Connect editor
+  // Step 3 — Connect editor
   const [writtenEditors, setWrittenEditors] = useState<Record<string, boolean>>({});
   const [writingEditor, setWritingEditor] = useState<string | null>(null);
 
   // Check Ollama on mount
   useEffect(() => {
     checkOllama();
-  }, []);
-
-  // Check if scout binary exists
-  useEffect(() => {
-    invoke<string>("get_synapses_data_dir").then((dir) => {
-      // Try to invoke get_service_status and look for scout with healthy status
-      invoke<{ name: string; status: string }[]>("get_service_status").then((services) => {
-        const scout = services.find((s) => s.name === "scout");
-        setScoutInstalled(scout?.status === "healthy");
-      }).catch(() => setScoutInstalled(false));
-    });
   }, []);
 
   async function checkOllama() {
@@ -154,23 +138,6 @@ export function Onboarding({ onComplete }: Props) {
     } finally {
       setIndexing(false);
     }
-  }
-
-  async function handleDownloadScout() {
-    setScoutDownloading(true);
-    setScoutProgress(0);
-    const u = await listen<number>("scout-download-progress", (e) => setScoutProgress(e.payload));
-    const u2 = await listen<{ success: boolean; error?: string }>("scout-download-done", (e) => {
-      setScoutDownloading(false);
-      setScoutInstalled(e.payload.success);
-      u();
-      u2();
-    });
-    invoke("download_scout").catch(() => {
-      setScoutDownloading(false);
-      u();
-      u2();
-    });
   }
 
   async function writeEditorConfig(editorId: string) {
@@ -325,75 +292,7 @@ export function Onboarding({ onComplete }: Props) {
       </div>
     </div>,
 
-    // Step 3 — Scout (optional)
-    <div key="scout" className="onboarding-step">
-      <div className="onboarding-icon"><Globe size={48} /></div>
-      <h1 className="onboarding-title">Web Intelligence (optional)</h1>
-      <p className="onboarding-desc">
-        Scout lets your AI agents search the web, fetch documentation, and watch YouTube
-        videos — all locally, with a built-in cache. It runs as a background service.
-      </p>
-
-      <div className="onboarding-detection-card">
-        {scoutInstalled === null && (
-          <div className="detect-row detect-checking">
-            <RefreshCw size={15} className="spin" />
-            <span>Checking Scout…</span>
-          </div>
-        )}
-        {scoutInstalled === true && (
-          <div className="detect-row detect-ok">
-            <CheckCircle size={15} />
-            <span>Scout is running</span>
-          </div>
-        )}
-        {scoutInstalled === false && !scoutDownloading && (
-          <div className="detect-row detect-warn">
-            <AlertCircle size={15} />
-            <span>Scout not installed</span>
-          </div>
-        )}
-        {scoutDownloading && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div className="detect-row detect-checking">
-              <RefreshCw size={15} className="spin" />
-              <span>Downloading Scout… {scoutProgress}%</span>
-            </div>
-            <div style={{ height: 4, background: "var(--border)", borderRadius: 2 }}>
-              <div style={{ width: `${scoutProgress}%`, height: "100%", background: "var(--accent)", borderRadius: 2, transition: "width 0.2s" }} />
-            </div>
-          </div>
-        )}
-      </div>
-
-      {scoutInstalled === false && (
-        <div className="option-cards">
-          <OptionCard
-            title="Install Scout"
-            desc="Downloads the Scout binary (~60 MB). Enables web search and doc fetching for your agents."
-            onClick={handleDownloadScout}
-            disabled={scoutDownloading}
-          />
-          <OptionCard
-            title="Skip for now"
-            desc="Web intelligence is optional. Synapses works fully without it."
-            onClick={() => setStep(4)}
-            secondary
-          />
-        </div>
-      )}
-
-      <div className="step-nav">
-        <button className="btn-ghost" onClick={() => setStep(2)}>Back</button>
-        {scoutInstalled !== false && (
-          <button className="btn-primary" onClick={() => setStep(4)}>
-            Continue <ArrowRight size={14} />
-          </button>
-        )}
-      </div>
-    </div>,
-
-    // Step 4 — Connect agent
+    // Step 3 — Connect agent
     <div key="connect" className="onboarding-step">
       <div className="onboarding-icon"><Plug size={48} /></div>
       <h1 className="onboarding-title">Connect your AI agent</h1>
@@ -432,14 +331,14 @@ export function Onboarding({ onComplete }: Props) {
       </p>
 
       <div className="step-nav">
-        <button className="btn-ghost" onClick={() => setStep(3)}>Back</button>
-        <button className="btn-primary" onClick={() => setStep(5)}>
+        <button className="btn-ghost" onClick={() => setStep(2)}>Back</button>
+        <button className="btn-primary" onClick={() => setStep(4)}>
           {Object.keys(writtenEditors).length > 0 ? "Continue" : "Skip for now"} <ArrowRight size={14} />
         </button>
       </div>
     </div>,
 
-    // Step 5 — Privacy
+    // Step 4 — Privacy
     <div key="privacy" className="onboarding-step">
       <div className="onboarding-icon" style={{ color: "var(--success)" }}>
         <Shield size={48} />
@@ -452,20 +351,20 @@ export function Onboarding({ onComplete }: Props) {
       <div className="privacy-checklist">
         <PrivacyItem checked label="Code graph" desc="Your indexed codebase — required for the tool to function" locked />
         <PrivacyItem checked label="Session logs" desc="Tool call counts and latency for local analytics (no code content)" />
-        <PrivacyItem checked label="Web cache" desc="Searches and pages fetched by agents via Scout" />
+        <PrivacyItem checked label="Web cache" desc="Package docs and pages fetched by agents (built-in doc cache)" />
       </div>
       <p className="onboarding-hint" style={{ textAlign: "center", width: "100%" }}>
         Change these anytime in <strong>Privacy & Data</strong>.
       </p>
       <div className="step-nav">
-        <button className="btn-ghost" onClick={() => setStep(4)}>Back</button>
-        <button className="btn-primary" onClick={() => setStep(6)}>
+        <button className="btn-ghost" onClick={() => setStep(3)}>Back</button>
+        <button className="btn-primary" onClick={() => setStep(5)}>
           Continue <ArrowRight size={14} />
         </button>
       </div>
     </div>,
 
-    // Step 6 — Done
+    // Step 5 — Done
     <div key="done" className="onboarding-step">
       <div className="onboarding-icon success-glow"><CheckCircle size={48} /></div>
       <h1 className="onboarding-title">You're all set!</h1>

@@ -12,7 +12,6 @@ import { Settings } from "./pages/Settings";
 import { Onboarding } from "./pages/Onboarding";
 import { Models } from "./pages/Models";
 import { Analytics } from "./pages/Analytics";
-import { Scout } from "./pages/Scout";
 import { Privacy } from "./pages/Privacy";
 import { Memory } from "./pages/Memory";
 import { Agents } from "./pages/Agents";
@@ -50,7 +49,6 @@ function AppShell() {
               <Route path="/projects" element={<Projects />} />
               <Route path="/agents" element={<Agents />} />
               <Route path="/models" element={<Models />} />
-              <Route path="/scout" element={<Scout />} />
               <Route path="/analytics" element={<Analytics />} />
               <Route path="/memory" element={<Memory />} />
               <Route path="/privacy" element={<Privacy />} />

@@ -4,7 +4,6 @@ import {
   FolderOpen,
   Users,
   Brain,
-  Globe,
   BarChart2,
   Database,
   Shield,
@@ -36,7 +35,6 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Intelligence",
     items: [
       { to: "/models", icon: Brain, label: "Models & Brain" },
-      { to: "/scout", icon: Globe, label: "Scout" },
     ],
   },
   {
