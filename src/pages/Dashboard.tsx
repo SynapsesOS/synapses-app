@@ -1,49 +1,11 @@
-import { useState, useEffect, useCallback } from "react";
+import { type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useServices } from "../hooks/useServices";
 import { ServiceCard } from "../components/ServiceCard";
-import { Zap, DollarSign, Activity, Users, FolderPlus, Plug, FolderOpen, TrendingUp } from "lucide-react";
-
-const PULSE_URL = "http://localhost:11437";
-
-interface PulseSummary {
-  total_tool_calls?: number;
-  tokens_saved?: number;
-  savings_pct?: number;
-  cost_saved_usd?: number;
-  sessions?: number;
-}
-
-interface PulseAgentStats {
-  agent_id: string;
-  sessions: number;
-  tool_calls: number;
-  tokens_saved: number;
-}
-
-function fmt(n?: number): string {
-  if (n == null) return "—";
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + "K";
-  return n.toLocaleString();
-}
+import { FolderPlus, Plug, FolderOpen, TrendingUp, AlertCircle } from "lucide-react";
 
 export function Dashboard() {
-  const { services, restart, stop } = useServices();
-  const [pulse, setPulse] = useState<{ summary?: PulseSummary; agents?: PulseAgentStats[] } | null>(null);
-
-  const fetchPulse = useCallback(() => {
-    fetch(`${PULSE_URL}/v1/dashboard?days=7`, { signal: AbortSignal.timeout(4000) })
-      .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then(setPulse)
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    fetchPulse();
-    const id = setInterval(fetchPulse, 30_000);
-    return () => clearInterval(id);
-  }, [fetchPulse]);
+  const { services, restart, stop, startupError } = useServices();
 
   const healthy = services.filter((s) => s.status === "healthy").length;
   const total = services.length;
@@ -59,42 +21,11 @@ export function Dashboard() {
         </div>
       </div>
 
-      {/* Hero stats — only when Pulse is running */}
-      {pulse?.summary && (
-        <section className="hero-stats">
-          <HeroStat
-            icon={<Zap size={18} style={{ color: "var(--accent)" }} />}
-            label="Tokens Saved"
-            value={fmt(pulse.summary.tokens_saved)}
-            sub={
-              pulse.summary.savings_pct != null
-                ? `${pulse.summary.savings_pct.toFixed(1)}% compression`
-                : "last 7 days"
-            }
-          />
-          <HeroStat
-            icon={<DollarSign size={18} style={{ color: "var(--success)" }} />}
-            label="Cost Saved"
-            value={
-              pulse.summary.cost_saved_usd != null
-                ? `$${pulse.summary.cost_saved_usd.toFixed(2)}`
-                : "—"
-            }
-            sub="last 7 days"
-          />
-          <HeroStat
-            icon={<Activity size={18} style={{ color: "var(--warning)" }} />}
-            label="Tool Calls"
-            value={fmt(pulse.summary.total_tool_calls)}
-            sub="last 7 days"
-          />
-          <HeroStat
-            icon={<Users size={18} style={{ color: "var(--accent-h)" }} />}
-            label="Sessions"
-            value={fmt(pulse.summary.sessions)}
-            sub="last 7 days"
-          />
-        </section>
+      {startupError && (
+        <div className="offline-banner">
+          <AlertCircle size={16} />
+          <span>{startupError}</span>
+        </div>
       )}
 
       {/* Services */}
@@ -110,30 +41,6 @@ export function Dashboard() {
           )}
         </div>
       </section>
-
-      {/* Recent agents */}
-      {pulse?.agents && pulse.agents.length > 0 && (
-        <section className="dash-section">
-          <div className="section-header-row">
-            <h2 className="section-title">Recent Agents</h2>
-            <Link to="/agents" className="section-link">View all →</Link>
-          </div>
-          <div className="agent-feed">
-            {pulse.agents.slice(0, 5).map((a) => (
-              <div key={a.agent_id} className="agent-feed-row">
-                <div className="agent-feed-dot" />
-                <div className="agent-feed-info">
-                  <span className="agent-feed-id">{a.agent_id}</span>
-                  <span className="agent-feed-meta">
-                    {a.sessions} session{a.sessions !== 1 ? "s" : ""} · {a.tool_calls} calls
-                  </span>
-                </div>
-                <span className="agent-feed-stat">{fmt(a.tokens_saved)} saved</span>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
 
       {/* Quick actions */}
       <section className="dash-section">
@@ -169,34 +76,13 @@ export function Dashboard() {
   );
 }
 
-function HeroStat({
-  icon,
-  label,
-  value,
-  sub,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  sub?: string;
-}) {
-  return (
-    <div className="hero-stat">
-      <div className="hero-stat-icon">{icon}</div>
-      <div className="hero-stat-value">{value}</div>
-      <div className="hero-stat-label">{label}</div>
-      {sub && <div className="hero-stat-sub">{sub}</div>}
-    </div>
-  );
-}
-
 function QuickAction({
   icon,
   label,
   desc,
   href,
 }: {
-  icon: React.ReactNode;
+  icon: ReactNode;
   label: string;
   desc: string;
   href: string;

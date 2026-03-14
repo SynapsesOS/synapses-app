@@ -5,6 +5,7 @@ import type { SidecarInfo } from "../types";
 
 export function useServices() {
   const [services, setServices] = useState<SidecarInfo[]>([]);
+  const [startupError, setStartupError] = useState<string | null>(null);
 
   useEffect(() => {
     // Initial fetch
@@ -18,11 +19,27 @@ export function useServices() {
     const unsub3 = listen<string>("service-offline", () => {
       invoke<SidecarInfo[]>("get_service_status").then(setServices).catch(() => {});
     });
+    // Startup failure events emitted by ensure_daemon_started before the health loop begins
+    const unsub4 = listen<string>("service-binary-missing", () => {
+      setStartupError("Synapses binary not found. Install it to ~/.synapses/bin/synapses");
+      invoke<SidecarInfo[]>("get_service_status").then(setServices).catch(() => {});
+    });
+    const unsub5 = listen<string>("service-start-failed", () => {
+      setStartupError("Failed to start Synapses daemon. Check logs in Settings → Service Log.");
+      invoke<SidecarInfo[]>("get_service_status").then(setServices).catch(() => {});
+    });
+    const unsub6 = listen<string>("service-start-timeout", () => {
+      setStartupError("Daemon started but isn't responding. Check Settings → Service Log.");
+      invoke<SidecarInfo[]>("get_service_status").then(setServices).catch(() => {});
+    });
 
     return () => {
       unsub1.then((f) => f());
       unsub2.then((f) => f());
       unsub3.then((f) => f());
+      unsub4.then((f) => f());
+      unsub5.then((f) => f());
+      unsub6.then((f) => f());
     };
   }, []);
 
@@ -38,5 +55,5 @@ export function useServices() {
     setServices(updated);
   };
 
-  return { services, restart, stop };
+  return { services, restart, stop, startupError };
 }

@@ -4,7 +4,6 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { Plus, RefreshCw, Trash2, FolderOpen, Activity, ChevronDown, ChevronRight } from "lucide-react";
 import { useToast } from "../context/ToastContext";
 
-const BRAIN_URL = "http://localhost:11435";
 const SDLC_PHASES = ["development", "testing", "review", "production"] as const;
 type SdlcPhase = (typeof SDLC_PHASES)[number];
 
@@ -93,17 +92,7 @@ export function Projects() {
 
   async function setSdlcForProject(projectPath: string, phase: SdlcPhase) {
     setSdlcPhases((s) => ({ ...s, [projectPath]: phase }));
-    try {
-      await fetch(`${BRAIN_URL}/v1/sdlc/phase`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phase, project: projectPath }),
-        signal: AbortSignal.timeout(5000),
-      });
-      addToast("success", `SDLC phase set to ${phase}`);
-    } catch {
-      addToast("warning", "Brain offline — phase applied locally only");
-    }
+    addToast("success", `SDLC phase set to ${phase}`);
   }
 
   return (

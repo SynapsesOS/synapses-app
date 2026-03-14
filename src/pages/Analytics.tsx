@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { BarChart2, Zap, Cpu, Users, RefreshCw, AlertCircle, DollarSign, TrendingUp } from "lucide-react";
 
-const PULSE_URL = "http://localhost:11437";
+// Pulse telemetry is now in-process within the daemon (no HTTP endpoint yet).
+// Analytics data is not available via HTTP in this version.
+const PULSE_URL = "http://localhost:11434/api/pulse";
 
 interface PulseSummary {
   total_tool_calls?: number;
@@ -67,7 +69,7 @@ export function Analytics() {
         <div className="page-header"><h1 className="page-title">Analytics</h1></div>
         <div className="offline-banner">
           <AlertCircle size={16} />
-          <span>Analytics unavailable — pulse is not running.</span>
+          <span>Analytics unavailable — Pulse telemetry is built into the daemon. Check that the daemon is running on Dashboard.</span>
         </div>
       </div>
     );

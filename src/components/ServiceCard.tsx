@@ -19,9 +19,8 @@ const STATUS_LABEL: Record<ServiceStatus, string> = {
 };
 
 const SERVICE_DESC: Record<string, string> = {
-  brain: "AI enrichment · port 11435",
-  scout: "Web intelligence · port 11436",
-  pulse: "Analytics · port 11437",
+  synapses: "Code intelligence daemon · port 11434",
+  scout: "Web intelligence · Unix socket",
 };
 
 interface Props {
