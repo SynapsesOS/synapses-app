@@ -439,12 +439,14 @@ fn register_launch_agent() -> Result<(), String> {
         let existing = std::fs::read_to_string(&plist_path).unwrap_or_default();
         if existing != plist {
             std::fs::write(&plist_path, &plist).map_err(|e| e.to_string())?;
-            // Unload old (ignore errors if not loaded) then load fresh.
+            // Bootout old job (macOS 12+ replacement for `launchctl unload`).
+            // Ignore errors — the job simply may not be loaded yet on first run.
+            let uid = unsafe { libc::getuid() };
             let _ = std::process::Command::new("launchctl")
-                .args(["unload", &plist_path.to_string_lossy()])
+                .args(["bootout", &format!("user/{uid}"), &plist_path.to_string_lossy()])
                 .status();
             std::process::Command::new("launchctl")
-                .args(["load", "-w", &plist_path.to_string_lossy()])
+                .args(["bootstrap", &format!("user/{uid}"), &plist_path.to_string_lossy()])
                 .status()
                 .map_err(|e| e.to_string())?;
         }
@@ -792,11 +794,19 @@ async fn ensure_daemon_started(app: AppHandle, mgr: SidecarManager) {
         }
     };
 
+    // Redirect daemon output to ~/.synapses/logs/daemon.log so startup crashes are visible.
+    let log_path = sidecar::synapses_data_dir().join("logs").join("daemon.log");
+    let _ = std::fs::create_dir_all(log_path.parent().unwrap());
+    let log_file = std::fs::OpenOptions::new()
+        .create(true).append(true).open(&log_path)
+        .ok()
+        .map(std::process::Stdio::from);
+
     let child = std::process::Command::new(&bin_path)
         .args(["daemon", "serve"])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(log_file.unwrap_or(std::process::Stdio::null()))
         .spawn();
 
     match child {
@@ -881,8 +891,12 @@ pub fn run() {
             }
 
             // Register LaunchAgent so daemon survives app restarts (macOS).
-            if let Err(e) = register_launch_agent() {
-                eprintln!("synapses-app: could not register launch agent: {e}");
+            // Skip in dev: binary doesn't exist (0-byte stub was skipped above).
+            let daemon_bin = sidecar::synapses_data_dir().join("bin").join("synapses");
+            if daemon_bin.exists() && std::fs::metadata(&daemon_bin).map(|m| m.len()).unwrap_or(0) > 0 {
+                if let Err(e) = register_launch_agent() {
+                    eprintln!("synapses-app: could not register launch agent: {e}");
+                }
             }
 
             let mgr_clone = mgr.clone();

@@ -32,4 +32,5 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 tokio = { version = "1", features = ["full"] }
 which = "7"
 futures-util = "0.3"
+libc = "0.2"
 
