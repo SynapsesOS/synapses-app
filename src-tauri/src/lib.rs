@@ -6,7 +6,9 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
 use tokio::time::sleep;
 
-use sidecar::{check_health, find_binary, kill_by_port, pid_for_port, SidecarInfo, SidecarManager, SidecarManagerInner, ServiceStatus};
+use sidecar::{check_health, check_unix_health, find_binary, kill_by_port, pid_for_port, pid_for_socket, SidecarInfo, SidecarManager, SidecarManagerInner, ServiceStatus};
+
+const DAEMON_HEALTH_PATH: &str = "/api/admin/health";
 
 // ── State types ──────────────────────────────────────────────────────────────
 
@@ -241,10 +243,10 @@ fn write_brain_config(content: String) -> Result<(), String> {
     std::fs::write(&path, content).map_err(|e| e.to_string())
 }
 
-/// Returns recent lines from the synapses log file
+/// Returns recent lines from the singleton daemon log file (~/.synapses/daemon.log)
 #[tauri::command]
 fn get_log_lines(n: usize) -> Vec<String> {
-    let log_path = sidecar::synapses_data_dir().join("logs").join("synapses.log");
+    let log_path = sidecar::synapses_data_dir().join("daemon.log");
     if let Ok(content) = std::fs::read_to_string(log_path) {
         let lines: Vec<String> = content.lines().map(String::from).collect();
         let start = if lines.len() > n { lines.len() - n } else { 0 };
@@ -328,14 +330,28 @@ fn write_app_settings(settings: HashMap<String, serde_json::Value>) -> Result<()
 
 /// On startup: for each sidecar port, check if something is already running.
 /// If yes, adopt it (record its PID, mark healthy) so we never spawn a duplicate.
+async fn is_service_healthy(port: u16, health_path: &str, socket_path: &Option<String>) -> bool {
+    if let Some(sock) = socket_path {
+        check_unix_health(sock, health_path).await
+    } else {
+        check_health(port, health_path).await
+    }
+}
+
 async fn adopt_running_sidecars(mgr: SidecarManager) {
-    let services: Vec<(String, u16)> = {
+    let services: Vec<(String, u16, String, Option<String>)> = {
         let m = mgr.lock().unwrap();
-        m.sidecars.iter().map(|(k, s)| (k.clone(), s.port)).collect()
+        m.sidecars.iter().map(|(k, s)| (k.clone(), s.port, s.health_path.clone(), s.socket_path.clone())).collect()
     };
-    for (name, port) in services {
-        if check_health(port).await {
-            let existing_pid = pid_for_port(port);
+    for (name, port, health_path, socket_path) in services {
+        if is_service_healthy(port, &health_path, &socket_path).await {
+            // Detect PID: socket-based services use lsof on the socket file;
+            // TCP services use lsof on the port.
+            let existing_pid = if let Some(ref sock) = socket_path {
+                pid_for_socket(sock)
+            } else {
+                pid_for_port(port)
+            };
             let mut m = mgr.lock().unwrap();
             m.record_success(&name);
             if let Some(s) = m.sidecars.get_mut(&name) {
@@ -351,17 +367,17 @@ async fn health_watch_loop(app: AppHandle, mgr: SidecarManager) {
     sleep(Duration::from_secs(3)).await;
 
     loop {
-        let services: Vec<(String, u16)> = {
+        let services: Vec<(String, u16, String, Option<String>)> = {
             let m = mgr.lock().unwrap();
             m.sidecars
                 .iter()
                 .filter(|(_, s)| s.enabled && s.status != ServiceStatus::Disabled)
-                .map(|(k, s)| (k.clone(), s.port))
+                .map(|(k, s)| (k.clone(), s.port, s.health_path.clone(), s.socket_path.clone()))
                 .collect()
         };
 
-        for (name, port) in services {
-            let healthy = check_health(port).await;
+        for (name, port, health_path, socket_path) in services {
+            let healthy = is_service_healthy(port, &health_path, &socket_path).await;
 
             if healthy {
                 mgr.lock().unwrap().record_success(&name);
@@ -382,8 +398,21 @@ async fn health_watch_loop(app: AppHandle, mgr: SidecarManager) {
 
                         if let Some((binary, args)) = binary_info {
                             if let Some(bin_path) = find_binary(&binary) {
-                                // Kill anything already on the port before spawning
-                                kill_by_port(port);
+                                // Kill old process before spawning.
+                                // Socket-based services (port=0) are killed by stored PID;
+                                // TCP services are killed by port to catch any stray process.
+                                if port == 0 {
+                                    let old_pid = mgr.lock().unwrap()
+                                        .sidecars.get(&name)
+                                        .and_then(|s| s.pid);
+                                    if let Some(pid) = old_pid {
+                                        let _ = std::process::Command::new("kill")
+                                            .args(["-TERM", &pid.to_string()])
+                                            .status();
+                                    }
+                                } else {
+                                    kill_by_port(port);
+                                }
                                 std::thread::sleep(std::time::Duration::from_millis(300));
 
                                 let mut cmd = std::process::Command::new(&bin_path);
@@ -417,6 +446,64 @@ async fn health_watch_loop(app: AppHandle, mgr: SidecarManager) {
         let _ = app.emit("service-status", &status);
 
         sleep(Duration::from_secs(10)).await;
+    }
+}
+
+/// Ensures the singleton daemon is running. Called on app launch before the health loop.
+/// If daemon is already healthy, returns immediately. Otherwise spawns it.
+async fn ensure_daemon_started(app: AppHandle, mgr: SidecarManager) {
+    if check_health(11434, DAEMON_HEALTH_PATH).await {
+        // Already running — adopt it.
+        let existing_pid = pid_for_port(11434);
+        let mut m = mgr.lock().unwrap();
+        m.record_success("synapses");
+        if let Some(s) = m.sidecars.get_mut("synapses") {
+            s.pid = existing_pid;
+        }
+        return;
+    }
+
+    let bin_path = match find_binary("synapses") {
+        Some(p) => p,
+        None => {
+            eprintln!("synapses-app: cannot find 'synapses' binary — daemon not started");
+            mgr.lock().unwrap().mark_offline("synapses");
+            let _ = app.emit("service-binary-missing", "synapses");
+            return;
+        }
+    };
+
+    let child = std::process::Command::new(&bin_path)
+        .args(["daemon", "serve"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+
+    match child {
+        Ok(c) => {
+            let pid = c.id();
+            // Poll until healthy (up to 30s).
+            for _ in 0..60 {
+                sleep(Duration::from_millis(500)).await;
+                if check_health(11434, DAEMON_HEALTH_PATH).await {
+                    let mut m = mgr.lock().unwrap();
+                    m.record_success("synapses");
+                    if let Some(s) = m.sidecars.get_mut("synapses") {
+                        s.pid = Some(pid);
+                    }
+                    return;
+                }
+            }
+            eprintln!("synapses-app: daemon started (pid {}) but health check timed out", pid);
+            mgr.lock().unwrap().mark_offline("synapses");
+            let _ = app.emit("service-start-timeout", "synapses");
+        }
+        Err(e) => {
+            eprintln!("synapses-app: failed to start daemon: {}", e);
+            mgr.lock().unwrap().mark_offline("synapses");
+            let _ = app.emit("service-start-failed", "synapses");
+        }
     }
 }
 
@@ -462,6 +549,8 @@ pub fn run() {
             let app_handle = app.handle().clone();
             let mgr_clone = mgr.clone();
             tauri::async_runtime::spawn(async move {
+                // Ensure singleton daemon is running before starting health watch.
+                ensure_daemon_started(app_handle.clone(), mgr_clone.clone()).await;
                 health_watch_loop(app_handle, mgr_clone).await;
             });
             Ok(())

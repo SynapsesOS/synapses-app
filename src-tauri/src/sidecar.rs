@@ -30,6 +30,9 @@ pub struct SidecarState {
     pub port: u16,
     pub binary: String,
     pub args: Vec<String>,
+    pub health_path: String,
+    /// When set, health checks go to this Unix socket file instead of a TCP port.
+    pub socket_path: Option<String>,
     pub status: ServiceStatus,
     pub consecutive_failures: u8,
     pub restarts_total: u32,
@@ -41,12 +44,14 @@ pub struct SidecarState {
 }
 
 impl SidecarState {
-    fn new(name: &str, port: u16, binary: &str, args: Vec<&str>) -> Self {
+    fn new(name: &str, port: u16, binary: &str, args: Vec<&str>, health_path: &str) -> Self {
         Self {
             name: name.to_string(),
             port,
             binary: binary.to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
+            health_path: health_path.to_string(),
+            socket_path: None,
             status: ServiceStatus::Starting,
             consecutive_failures: 0,
             restarts_total: 0,
@@ -105,18 +110,17 @@ pub struct SidecarManagerInner {
 impl SidecarManagerInner {
     pub fn new() -> Self {
         let mut sidecars = HashMap::new();
+        // Singleton daemon: one process serves all projects via HTTP MCP transport.
+        // Brain and pulse are now in-process within the daemon binary.
         sidecars.insert(
-            "brain".to_string(),
-            SidecarState::new("brain", 11435, "brain", vec!["serve"]),
+            "synapses".to_string(),
+            SidecarState::new("synapses", 11434, "synapses", vec!["daemon", "serve"], "/api/admin/health"),
         );
-        sidecars.insert(
-            "scout".to_string(),
-            SidecarState::new("scout", 11436, "scout", vec!["serve"]),
-        );
-        sidecars.insert(
-            "pulse".to_string(),
-            SidecarState::new("pulse", 11437, "pulse", vec!["serve"]),
-        );
+        // Scout stays separate (Python, Chromium dependency).
+        // Serves on Unix socket ~/.synapses/scout.sock — no TCP port.
+        let mut scout_state = SidecarState::new("scout", 0, "scout", vec!["serve", "--uds", "~/.synapses/scout.sock"], "/v1/health");
+        scout_state.socket_path = Some("~/.synapses/scout.sock".to_string());
+        sidecars.insert("scout".to_string(), scout_state);
         Self { sidecars }
     }
 
@@ -125,6 +129,7 @@ impl SidecarManagerInner {
         infos.sort_by(|a, b| a.name.cmp(&b.name));
         infos
     }
+
 
     pub fn get_info(&self, name: &str) -> Option<SidecarInfo> {
         self.sidecars.get(name).map(|s| s.to_info())
@@ -193,13 +198,54 @@ impl SidecarManagerInner {
     }
 }
 
-pub async fn check_health(port: u16) -> bool {
+pub async fn check_health(port: u16, path: &str) -> bool {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
         .build()
         .unwrap_or_default();
-    let url = format!("http://localhost:{}/v1/health", port);
+    let url = format!("http://localhost:{}{}", port, path);
     client.get(&url).send().await.map(|r| r.status().is_success()).unwrap_or(false)
+}
+
+/// Health check over a Unix domain socket: sends a minimal HTTP/1.0 GET
+/// and checks for a 200 response. Returns false if the socket doesn't exist
+/// or doesn't respond within 3 seconds.
+#[cfg(unix)]
+pub async fn check_unix_health(sock_path: &str, http_path: &str) -> bool {
+    use tokio::net::UnixStream;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let expanded = if sock_path.starts_with("~/") {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        format!("{}/{}", home, &sock_path[2..])
+    } else {
+        sock_path.to_string()
+    };
+
+    let stream_result = tokio::time::timeout(
+        Duration::from_secs(3),
+        UnixStream::connect(&expanded),
+    ).await;
+    let mut stream: UnixStream = match stream_result {
+        Ok(Ok(s)) => s,
+        _ => return false,
+    };
+
+    let request = format!("GET {} HTTP/1.0\r\nHost: localhost\r\n\r\n", http_path);
+    if stream.write_all(request.as_bytes()).await.is_err() {
+        return false;
+    }
+
+    let mut buf = [0u8; 32];
+    match tokio::time::timeout(Duration::from_secs(3), stream.read(&mut buf)).await {
+        Ok(Ok(n)) if n > 0 => String::from_utf8_lossy(&buf[..n]).contains("200"),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+pub async fn check_unix_health(_sock_path: &str, _http_path: &str) -> bool {
+    false
 }
 
 /// Kill whatever process is currently listening on `port`.
@@ -230,6 +276,30 @@ pub fn pid_for_port(port: u16) -> Option<u32> {
     {
         if let Ok(out) = std::process::Command::new("lsof")
             .args(["-ti", &format!("tcp:{}", port)])
+            .output()
+        {
+            let pids = String::from_utf8_lossy(&out.stdout);
+            return pids.split_whitespace()
+                .next()
+                .and_then(|s| s.trim().parse::<u32>().ok());
+        }
+    }
+    None
+}
+
+/// Try to find the PID of the process that has `sock_path` open as a socket.
+/// Uses `lsof` on macOS/Linux. Expands a leading `~/` using $HOME.
+pub fn pid_for_socket(sock_path: &str) -> Option<u32> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let expanded = if sock_path.starts_with("~/") {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+            format!("{}/{}", home, &sock_path[2..])
+        } else {
+            sock_path.to_string()
+        };
+        if let Ok(out) = std::process::Command::new("lsof")
+            .args(["-t", &expanded])
             .output()
         {
             let pids = String::from_utf8_lossy(&out.stdout);
