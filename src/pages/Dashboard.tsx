@@ -5,7 +5,7 @@ import { ServiceCard } from "../components/ServiceCard";
 import { FolderPlus, Plug, FolderOpen, TrendingUp, AlertCircle } from "lucide-react";
 
 export function Dashboard() {
-  const { services, restart, stop, startupError } = useServices();
+  const { services, restart, stop, enable, startupError } = useServices();
 
   const healthy = services.filter((s) => s.status === "healthy").length;
   const total = services.length;
@@ -36,7 +36,7 @@ export function Dashboard() {
             <div className="empty-state">Checking service status…</div>
           ) : (
             services.map((s) => (
-              <ServiceCard key={s.name} info={s} onRestart={restart} onStop={stop} />
+              <ServiceCard key={s.name} info={s} onRestart={restart} onStop={stop} onEnable={enable} />
             ))
           )}
         </div>

@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { useState } from "react";
 import { RefreshCw, Square, Play } from "lucide-react";
 import type { SidecarInfo, ServiceStatus } from "../types";
 
@@ -26,9 +26,11 @@ interface Props {
   info: SidecarInfo;
   onRestart: (name: string) => void;
   onStop: (name: string) => void;
+  onEnable: (name: string) => Promise<void>;
 }
 
-export function ServiceCard({ info, onRestart, onStop }: Props) {
+export function ServiceCard({ info, onRestart, onStop, onEnable }: Props) {
+  const [enabling, setEnabling] = useState(false);
   const dot = STATUS_COLOR[info.status] ?? "#6b7280";
   const label = STATUS_LABEL[info.status] ?? info.status;
 
@@ -55,10 +57,14 @@ export function ServiceCard({ info, onRestart, onStop }: Props) {
           {info.status === "disabled" ? (
             <button
               className="icon-btn"
-              title="Enable"
-              onClick={() => invoke("enable_service", { name: info.name })}
+              title={enabling ? "Starting…" : "Enable"}
+              disabled={enabling}
+              onClick={async () => {
+                setEnabling(true);
+                try { await onEnable(info.name); } finally { setEnabling(false); }
+              }}
             >
-              <Play size={14} />
+              {enabling ? <RefreshCw size={14} className="spin" /> : <Play size={14} />}
             </button>
           ) : (
             <button

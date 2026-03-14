@@ -55,5 +55,11 @@ export function useServices() {
     setServices(updated);
   };
 
-  return { services, restart, stop, startupError };
+  const enable = async (name: string) => {
+    await invoke("enable_service", { name });
+    const updated = await invoke<SidecarInfo[]>("get_service_status");
+    setServices(updated);
+  };
+
+  return { services, restart, stop, enable, startupError };
 }
