@@ -1,386 +1,459 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  Shield,
-  HardDrive,
   FolderOpen,
   Trash2,
   RefreshCw,
   CheckCircle,
-  Lock,
-  Eye,
-  Database,
+  ChevronDown,
+  ChevronRight,
+  AlertTriangle,
+  X,
 } from "lucide-react";
+import { useToast } from "../context/ToastContext";
 
-const PULSE_URL = "http://localhost:11437";
-
-interface DataSizes {
-  synapses: number;
-  pulse: number;
-  brain: number;
+interface Project {
+  path: string;
+  name: string;
 }
 
 function fmtBytes(b: number): string {
-  if (b === 0) return "not found";
   if (b >= 1024 * 1024 * 1024) return (b / (1024 * 1024 * 1024)).toFixed(1) + " GB";
   if (b >= 1024 * 1024) return (b / (1024 * 1024)).toFixed(1) + " MB";
   if (b >= 1024) return (b / 1024).toFixed(1) + " KB";
   return b + " B";
 }
 
-type ClearKey = "web-cache" | "pulse-sessions" | "brain-enrichments";
-type ClearState = "idle" | "clearing" | "done" | "error";
-
 export function Privacy() {
-  const [dataDir, setDataDir] = useState("~/.synapses");
-  const [sizes, setSizes] = useState<DataSizes | null>(null);
-  const [loadingSizes, setLoadingSizes] = useState(true);
-  const [clearStates, setClearStates] = useState<Record<ClearKey, ClearState>>({
-    "web-cache": "idle",
-    "pulse-sessions": "idle",
-    "brain-enrichments": "idle",
-  });
-
-  const [settings, setSettings] = useState({
-    log_tool_calls: true,
-    log_sessions: true,
-    cache_web_searches: true,
-  });
+  const { addToast } = useToast();
+  const [loading, setLoading] = useState(true);
+  const [dbSize, setDbSize] = useState(0);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [logToolCalls, setLogToolCalls] = useState(true);
   const [settingsSaved, setSettingsSaved] = useState(false);
+  const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
+  const [confirmModal, setConfirmModal] = useState<{
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
+  const [clearingWebCache, setClearingWebCache] = useState(false);
+  const [clearingMemory, setClearingMemory] = useState(false);
+  const [clearingLogs, setClearingLogs] = useState(false);
+  const [wipingAll, setWipingAll] = useState(false);
+  const [selectedProject, setSelectedProject] = useState("");
+  const [deletingProject, setDeletingProject] = useState(false);
 
   const loadData = useCallback(async () => {
-    setLoadingSizes(true);
+    setLoading(true);
     try {
-      const [dir, sz, saved] = await Promise.all([
-        invoke<string>("get_synapses_data_dir"),
-        invoke<DataSizes>("get_data_sizes"),
+      const [sizes, saved, projectsRaw] = await Promise.all([
+        invoke<Record<string, number>>("get_data_sizes"),
         invoke<Record<string, unknown>>("read_app_settings"),
+        invoke<string>("run_synapses_cmd", { args: ["list", "--json"] })
+          .then((r) => JSON.parse(r) as Project[])
+          .catch(() => [] as Project[]),
       ]);
-      setDataDir(dir);
-      setSizes(sz);
+      setDbSize(sizes.synapses ?? 0);
+      setProjects(projectsRaw);
       if (saved.log_tool_calls !== undefined) {
-        setSettings({
-          log_tool_calls: saved.log_tool_calls as boolean,
-          log_sessions: (saved.log_sessions ?? true) as boolean,
-          cache_web_searches: (saved.cache_web_searches ?? true) as boolean,
-        });
+        setLogToolCalls(saved.log_tool_calls as boolean);
       }
     } catch {
       // non-fatal
     } finally {
-      setLoadingSizes(false);
+      setLoading(false);
     }
   }, []);
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  useEffect(() => { loadData(); }, [loadData]);
 
-  async function saveSettings(next: typeof settings) {
-    setSettings(next);
+  async function toggleLogToolCalls() {
+    const next = !logToolCalls;
+    setLogToolCalls(next);
     try {
-      await invoke("write_app_settings", { settings: next });
+      await invoke("write_app_settings", { settings: { log_tool_calls: next } });
       setSettingsSaved(true);
       setTimeout(() => setSettingsSaved(false), 2000);
-    } catch {
-      // non-fatal
-    }
+    } catch { /* non-fatal */ }
   }
 
-  function toggleSetting(key: keyof typeof settings) {
-    saveSettings({ ...settings, [key]: !settings[key] });
+  function toggleCard(id: string) {
+    setExpandedCards((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
   }
 
-  async function clearData(key: ClearKey) {
-    setClearStates((s) => ({ ...s, [key]: "clearing" }));
+  async function handleClearAgentMemory() {
+    setClearingMemory(true);
+    setConfirmModal(null);
     try {
-      if (key === "web-cache") {
-        await invoke("run_synapses_cmd", { args: ["cache", "clear"] }).catch(() => { throw new Error("failed"); });
-      } else if (key === "pulse-sessions") {
-        const res = await fetch(`${PULSE_URL}/v1/sessions`, {
-          method: "DELETE",
-          signal: AbortSignal.timeout(5000),
-        });
-        if (!res.ok) throw new Error("failed");
-      } else if (key === "brain-enrichments") {
-        const res = await fetch("http://localhost:11435/v1/cache/clear", {
-          method: "POST",
-          signal: AbortSignal.timeout(5000),
-        });
-        if (!res.ok) throw new Error("failed");
-      }
-      setClearStates((s) => ({ ...s, [key]: "done" }));
-      setTimeout(() => {
-        setClearStates((s) => ({ ...s, [key]: "idle" }));
-        loadData();
-      }, 2000);
-    } catch {
-      setClearStates((s) => ({ ...s, [key]: "error" }));
-      setTimeout(() => setClearStates((s) => ({ ...s, [key]: "idle" })), 3000);
+      await invoke("clear_agent_memory");
+      addToast("success", "Agent memory cleared across all projects");
+    } catch (e) {
+      addToast("error", `Failed: ${e}`);
+    } finally {
+      setClearingMemory(false);
     }
   }
 
-  const totalBytes = sizes
-    ? sizes.synapses + sizes.pulse + sizes.brain
-    : 0;
+  async function handleClearActivityLogs() {
+    setClearingLogs(true);
+    setConfirmModal(null);
+    try {
+      await invoke("clear_activity_logs");
+      addToast("success", "Activity logs cleared");
+    } catch (e) {
+      addToast("error", `Failed: ${e}`);
+    } finally {
+      setClearingLogs(false);
+    }
+  }
+
+  async function handleClearWebCache() {
+    setClearingWebCache(true);
+    try {
+      await invoke("clear_web_cache");
+      addToast("success", "Web documentation cache cleared");
+      loadData();
+    } catch (e) {
+      addToast("error", `Failed: ${e}`);
+    } finally {
+      setClearingWebCache(false);
+    }
+  }
+
+  async function handleDeleteProject(path: string) {
+    setDeletingProject(true);
+    setConfirmModal(null);
+    try {
+      await invoke("run_synapses_cmd", { args: ["reset", "-path", path] });
+      addToast("success", "Project data deleted");
+      setSelectedProject("");
+      loadData();
+    } catch (e) {
+      addToast("error", `Failed: ${e}`);
+    } finally {
+      setDeletingProject(false);
+    }
+  }
+
+  async function handleWipeAll() {
+    setWipingAll(true);
+    setConfirmModal(null);
+    try {
+      await invoke("wipe_all_data");
+      addToast("success", "All data wiped");
+      setProjects([]);
+      setDbSize(0);
+    } catch (e) {
+      addToast("error", `Failed: ${e}`);
+    } finally {
+      setWipingAll(false);
+    }
+  }
 
   return (
     <div className="page">
       <div className="page-header">
         <div>
           <h1 className="page-title">Privacy & Data</h1>
-          <span className="page-subtitle">Everything stored locally — nothing leaves your machine</span>
+          <span className="page-subtitle">You own your data — here's everything Synapses stores</span>
         </div>
-        <button className="btn-ghost" onClick={loadData} title="Refresh">
-          <RefreshCw size={14} className={loadingSizes ? "spin" : ""} />
-        </button>
-      </div>
-
-      {/* Local-first guarantee */}
-      <div className="privacy-banner">
-        <Lock size={15} />
-        <span>
-          <strong>100% local.</strong> Synapses stores all data on your machine at{" "}
-          <code>{dataDir}</code>. No cloud sync. No external telemetry. No account required.
-        </span>
-      </div>
-
-      {/* Data manifest */}
-      <section className="settings-section">
-        <div className="section-header-row">
-          <h2 className="section-title">Data Stored on Your Machine</h2>
-          {sizes && <span className="section-meta">Total: {fmtBytes(totalBytes)}</span>}
-        </div>
-
-        <div className="privacy-db-grid">
-          <DbCard
-            icon={<Database size={16} style={{ color: "var(--accent)" }} />}
-            name="Code Graph"
-            file="synapses.db"
-            desc="AST parse results, function/class relationships, architectural rules, task memory for agents."
-            size={sizes?.synapses}
-            loading={loadingSizes}
-            actions={
-              <button
-                className="btn-secondary btn-sm"
-                onClick={() => invoke("run_synapses_cmd", { args: ["reset"] }).catch(() => {})}
-              >
-                <Trash2 size={12} /> Full reset
-              </button>
-            }
-          />
-          <DbCard
-            icon={<Eye size={16} style={{ color: "var(--warning)" }} />}
-            name="Telemetry"
-            file="pulse.db"
-            desc="Agent session logs, tool call counts, latency metrics, token compression stats. All local."
-            size={sizes?.pulse}
-            loading={loadingSizes}
-            actions={
-              <ClearButton
-                state={clearStates["pulse-sessions"]}
-                label="Clear sessions"
-                onClear={() => clearData("pulse-sessions")}
-              />
-            }
-          />
-          <DbCard
-            icon={<Shield size={16} style={{ color: "var(--success)" }} />}
-            name="AI Summaries"
-            file="brain.db"
-            desc="LLM-generated summaries of your code nodes. Produced locally by Ollama — no data sent externally."
-            size={sizes?.brain}
-            loading={loadingSizes}
-            actions={
-              <ClearButton
-                state={clearStates["brain-enrichments"]}
-                label="Clear enrichments"
-                onClear={() => clearData("brain-enrichments")}
-              />
-            }
-          />
-          <DbCard
-            icon={<HardDrive size={16} style={{ color: "var(--text-muted)" }} />}
-            name="Web Cache"
-            file="synapses.db (web_cache table)"
-            desc="Package docs and URLs fetched by agents via lookup_docs. Version-pinned Go docs never expire; other URLs expire after 24h."
-            size={undefined}
-            loading={false}
-            actions={
-              <ClearButton
-                state={clearStates["web-cache"]}
-                label="Clear web cache"
-                onClear={() => clearData("web-cache")}
-              />
-            }
-          />
-        </div>
-      </section>
-
-      {/* Open data dir */}
-      <section className="settings-section">
-        <h2 className="section-title">Data Directory</h2>
-        <div className="privacy-dir-row">
-          <code className="privacy-dir-path">{dataDir}</code>
-          <button
-            className="btn-secondary btn-sm"
-            onClick={() => invoke("open_data_dir").catch(() => {})}
-          >
-            <FolderOpen size={13} /> Open in Finder
-          </button>
-        </div>
-        <p className="section-desc" style={{ marginTop: 8 }}>
-          All Synapses data lives here. You can back it up, inspect it, or delete it manually at any time.
-        </p>
-      </section>
-
-      {/* What gets logged */}
-      <section className="settings-section">
-        <div className="section-header-row">
-          <h2 className="section-title">What Gets Logged</h2>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           {settingsSaved && (
             <span style={{ fontSize: 12, color: "var(--success)", display: "flex", alignItems: "center", gap: 4 }}>
               <CheckCircle size={12} /> Saved
             </span>
           )}
+          <button className="btn-ghost" onClick={loadData} title="Refresh">
+            <RefreshCw size={14} className={loading ? "spin" : ""} />
+          </button>
         </div>
-        <p className="section-desc">
-          All logging is local only. Nothing is sent to external servers.
-          Disabling options reduces the quality of local analytics.
-        </p>
-        <div className="privacy-toggles">
-          <PrivacyToggle
-            label="Tool call logs"
-            desc="Records which MCP tools agents call, how often, and latency. Powers the Analytics page."
-            checked={settings.log_tool_calls}
-            onChange={() => toggleSetting("log_tool_calls")}
-          />
-          <PrivacyToggle
-            label="Agent session tracking"
-            desc="Tracks which agent IDs start and end sessions. Used for multi-agent coordination."
-            checked={settings.log_sessions}
-            onChange={() => toggleSetting("log_sessions")}
-          />
-          <PrivacyToggle
-            label="Web search cache"
-            desc="Caches fetched documentation pages and URLs in synapses.db to avoid re-fetching across sessions."
-            checked={settings.cache_web_searches}
-            onChange={() => toggleSetting("cache_web_searches")}
-          />
-        </div>
-      </section>
+      </div>
 
-      {/* Guarantee */}
+      {/* Privacy Promise */}
+      <div className="privacy-pillars">
+        <div className="privacy-pillar">
+          <div className="privacy-pillar-icon">🔒</div>
+          <div className="privacy-pillar-title">100% Local</div>
+          <div className="privacy-pillar-desc">All data lives on your machine. No cloud servers, no remote databases.</div>
+        </div>
+        <div className="privacy-pillar">
+          <div className="privacy-pillar-icon">🚫</div>
+          <div className="privacy-pillar-title">No Telemetry</div>
+          <div className="privacy-pillar-desc">Nothing sent to Anthropic, GitHub, or any third party. Ever.</div>
+        </div>
+        <div className="privacy-pillar">
+          <div className="privacy-pillar-icon">⚡</div>
+          <div className="privacy-pillar-title">Precise AI Context</div>
+          <div className="privacy-pillar-desc">Your AI gets code structure — names, relationships, rules. Never raw file content.</div>
+        </div>
+        <div className="privacy-pillar">
+          <div className="privacy-pillar-icon">🧠</div>
+          <div className="privacy-pillar-title">You're in Control</div>
+          <div className="privacy-pillar-desc">Inspect, clear, or delete any data at any time from this screen.</div>
+        </div>
+      </div>
+
+      {/* What We Store */}
       <section className="settings-section">
-        <h2 className="section-title">Privacy Guarantee</h2>
-        <div className="privacy-guarantees">
-          {[
-            "Your code never leaves your machine",
-            "Synapses does not have a cloud backend",
-            "No analytics are sent to Anthropic, GitHub, or any third party",
-            "AI enrichment runs locally via Ollama — your code is not sent to any LLM API",
-            "Web cache uses only URLs you or your agents explicitly fetch — no background crawling",
-            "You can inspect, export, or delete all stored data at any time",
-          ].map((item) => (
-            <div key={item} className="privacy-guarantee-row">
-              <CheckCircle size={14} style={{ color: "var(--success)", flexShrink: 0 }} />
-              <span>{item}</span>
+        <div className="section-header-row">
+          <h2 className="section-title">What We Store</h2>
+          {dbSize > 0 && <span className="section-meta">{fmtBytes(dbSize)} total · {projects.length} project{projects.length !== 1 ? "s" : ""}</span>}
+        </div>
+        <p className="section-desc" style={{ marginBottom: 16 }}>Tap any category to see exactly what's inside and how to clear it.</p>
+        <div className="data-category-list">
+
+          <DataCategoryCard
+            id="code"
+            icon="📸"
+            title="Code Snapshots"
+            summary="The structure of your code — function names, file locations, and how everything connects."
+            note="We never read the actual content inside your functions. Only the shape of your code."
+            badge="Per project"
+            expanded={expandedCards.has("code")}
+            onToggle={() => toggleCard("code")}
+            action={
+              <button className="btn-secondary btn-sm" onClick={() => invoke("open_data_dir").catch(() => {})}>
+                <FolderOpen size={11} /> Open in Finder
+              </button>
+            }
+          >
+            <div className="data-tech-detail">
+              <div className="detail-row"><strong>Stored:</strong> Function/class names, file paths, call relationships, import graphs, architecture rules you've defined.</div>
+              <div className="detail-row"><strong>Not stored:</strong> Actual source code content, function bodies, comments, string literals.</div>
+              <div className="detail-row"><strong>Location:</strong> <code>~/.synapses/cache/&lt;project&gt;.db</code> — one database per indexed project.</div>
             </div>
-          ))}
+          </DataCategoryCard>
+
+          <DataCategoryCard
+            id="memory"
+            icon="🧩"
+            title="Agent Memory"
+            summary="Plans, tasks, and decisions your AI saves so it can pick up exactly where it left off."
+            note="This is what makes your AI feel like it actually remembers your project across sessions."
+            badge="Per project"
+            expanded={expandedCards.has("memory")}
+            onToggle={() => toggleCard("memory")}
+            action={
+              <button
+                className="btn-secondary btn-sm btn-danger-hover"
+                disabled={clearingMemory}
+                onClick={() => setConfirmModal({
+                  title: "Clear all agent memory?",
+                  message: "This will permanently delete all plans, tasks, decisions, and learned patterns across every indexed project. Your code index is preserved. This cannot be undone.",
+                  onConfirm: handleClearAgentMemory,
+                })}
+              >
+                {clearingMemory ? <><RefreshCw size={11} className="spin" /> Clearing…</> : <><Trash2 size={11} /> Clear memory</>}
+              </button>
+            }
+          >
+            <div className="data-tech-detail">
+              <div className="detail-row"><strong>Stored:</strong> Plans and task lists agents create, what was done and what's still pending, past decisions and patterns, code quality notes.</div>
+              <div className="detail-row"><strong>Why:</strong> When you start a new session, your agent resumes mid-task rather than starting from scratch.</div>
+              <div className="detail-row"><strong>Multi-agent:</strong> Each AI agent (Claude, Cursor, etc.) tags its own memory. Clearing removes all agents' memory across all projects.</div>
+            </div>
+          </DataCategoryCard>
+
+          <DataCategoryCard
+            id="activity"
+            icon="📊"
+            title="Activity Log"
+            summary="A record of which tools your AI used and how fast — powers the Analytics screen."
+            note="Only metadata is logged (tool name + duration). Never the content your AI was reading."
+            badge={
+              <span className={`privacy-badge ${logToolCalls ? "badge-on" : "badge-off"}`}>
+                {logToolCalls ? "Recording" : "Paused"}
+              </span>
+            }
+            expanded={expandedCards.has("activity")}
+            onToggle={() => toggleCard("activity")}
+            action={
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <button
+                  className="btn-secondary btn-sm btn-danger-hover"
+                  disabled={clearingLogs}
+                  onClick={() => setConfirmModal({
+                    title: "Clear activity logs?",
+                    message: "This will permanently delete all recorded tool call logs across every indexed project. Cannot be undone.",
+                    onConfirm: handleClearActivityLogs,
+                  })}
+                >
+                  {clearingLogs ? <><RefreshCw size={11} className="spin" /> Clearing…</> : <><Trash2 size={11} /> Clear</>}
+                </button>
+                <button
+                  className={`toggle ${logToolCalls ? "toggle-on" : ""}`}
+                  onClick={toggleLogToolCalls}
+                  role="switch"
+                  aria-checked={logToolCalls}
+                  title={logToolCalls ? "Recording — click to pause" : "Paused — click to resume"}
+                >
+                  <span className="toggle-thumb" />
+                </button>
+              </div>
+            }
+          >
+            <div className="data-tech-detail">
+              <div className="detail-row"><strong>Stored:</strong> Tool name, which agent called it, duration in milliseconds, success or failure, timestamp.</div>
+              <div className="detail-row"><strong>Not stored:</strong> What the agent was reading, the responses it received, or any code content.</div>
+              <div className="detail-row"><strong>Effect:</strong> When paused, the Analytics screen stops receiving new data. Existing logs are preserved until cleared.</div>
+            </div>
+          </DataCategoryCard>
+
+          <DataCategoryCard
+            id="webcache"
+            icon="🌐"
+            title="Web Docs Cache"
+            summary="Documentation pages your AI fetched — package docs, READMEs. Saved for faster repeat lookups."
+            note="Regular pages auto-clear after 24 hours. Package docs are kept until you re-index."
+            badge="Auto-clears"
+            expanded={expandedCards.has("webcache")}
+            onToggle={() => toggleCard("webcache")}
+            action={
+              <button className="btn-secondary btn-sm" onClick={handleClearWebCache} disabled={clearingWebCache}>
+                {clearingWebCache
+                  ? <><RefreshCw size={11} className="spin" /> Clearing…</>
+                  : <><Trash2 size={11} /> Clear cache</>}
+              </button>
+            }
+          >
+            <div className="data-tech-detail">
+              <div className="detail-row"><strong>Stored:</strong> Text content of documentation pages your agents explicitly fetched.</div>
+              <div className="detail-row"><strong>TTL:</strong> Regular URLs expire after 24 hours automatically. Go package docs are version-pinned.</div>
+              <div className="detail-row"><strong>Control:</strong> Turn off "Cache web documentation" in Privacy Controls to disable caching entirely.</div>
+            </div>
+          </DataCategoryCard>
+
         </div>
       </section>
-    </div>
-  );
-}
 
-function DbCard({
-  icon,
-  name,
-  file,
-  desc,
-  size,
-  loading,
-  actions,
-}: {
-  icon: React.ReactNode;
-  name: string;
-  file: string;
-  desc: string;
-  size?: number;
-  loading: boolean;
-  actions?: React.ReactNode;
-}) {
-  return (
-    <div className="privacy-db-card">
-      <div className="privacy-db-header">
-        {icon}
-        <div className="privacy-db-title">
-          <span className="privacy-db-name">{name}</span>
-          <code className="privacy-db-file">{file}</code>
+      {/* Your Data, Your Choice */}
+      <section className="settings-section">
+        <h2 className="section-title">Your Data, Your Choice</h2>
+
+        <div className="danger-zone">
+          <div className="danger-zone-header">
+            <AlertTriangle size={13} />
+            <span>Danger Zone — these actions cannot be undone</span>
+          </div>
+          <div className="danger-actions">
+            <div className="danger-action-row">
+              <div className="danger-action-info">
+                <div className="danger-action-title">Delete Project Data</div>
+                <div className="danger-action-desc">Removes the index and all agent memory for one project</div>
+              </div>
+              <div className="danger-action-controls">
+                <select
+                  className="project-select"
+                  value={selectedProject}
+                  onChange={(e) => setSelectedProject(e.target.value)}
+                >
+                  <option value="">Select project…</option>
+                  {projects.map((p) => (
+                    <option key={p.path} value={p.path}>{p.name}</option>
+                  ))}
+                </select>
+                <button
+                  className="btn-danger btn-sm"
+                  disabled={!selectedProject || deletingProject}
+                  onClick={() => setConfirmModal({
+                    title: "Delete project data?",
+                    message: `This will permanently remove the code index and all agent memory for "${projects.find((p) => p.path === selectedProject)?.name}". Cannot be undone.`,
+                    onConfirm: () => handleDeleteProject(selectedProject),
+                  })}
+                >
+                  {deletingProject ? <><RefreshCw size={11} className="spin" /> Deleting…</> : <><Trash2 size={11} /> Delete</>}
+                </button>
+              </div>
+            </div>
+            <div className="danger-divider" />
+            <div className="danger-action-row">
+              <div className="danger-action-info">
+                <div className="danger-action-title">Wipe Everything</div>
+                <div className="danger-action-desc">Removes all indexes, agent memory, logs, and settings across every project</div>
+              </div>
+              <button
+                className="btn-danger btn-sm"
+                disabled={wipingAll}
+                onClick={() => setConfirmModal({
+                  title: "Wipe all data?",
+                  message: "This permanently deletes ALL indexes, agent memory, logs, and settings for every project. You will need to re-index from scratch.",
+                  onConfirm: handleWipeAll,
+                })}
+              >
+                {wipingAll ? <><RefreshCw size={11} className="spin" /> Wiping…</> : "Wipe Everything"}
+              </button>
+            </div>
+          </div>
         </div>
-        <span className="privacy-db-size">
-          {loading ? "…" : size !== undefined ? fmtBytes(size) : "—"}
-        </span>
-      </div>
-      <p className="privacy-db-desc">{desc}</p>
-      {actions && <div className="privacy-db-actions">{actions}</div>}
-    </div>
-  );
-}
+      </section>
 
-function ClearButton({
-  state,
-  label,
-  onClear,
-}: {
-  state: ClearState;
-  label: string;
-  onClear: () => void;
-}) {
-  return (
-    <button
-      className="btn-secondary btn-sm btn-danger-hover"
-      disabled={state === "clearing"}
-      onClick={onClear}
-    >
-      {state === "clearing" ? (
-        <><RefreshCw size={12} className="spin" /> Clearing…</>
-      ) : state === "done" ? (
-        <><CheckCircle size={12} /> Cleared</>
-      ) : state === "error" ? (
-        "Failed — service offline?"
-      ) : (
-        <><Trash2 size={12} /> {label}</>
+      {/* Confirm Modal */}
+      {confirmModal && (
+        <div className="modal-overlay" onClick={() => setConfirmModal(null)}>
+          <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <AlertTriangle size={18} style={{ color: "var(--danger)" }} />
+              <h3>{confirmModal.title}</h3>
+              <button className="modal-close" onClick={() => setConfirmModal(null)}>
+                <X size={14} />
+              </button>
+            </div>
+            <p className="modal-message">{confirmModal.message}</p>
+            <div className="modal-actions">
+              <button className="btn-secondary" onClick={() => setConfirmModal(null)}>Cancel</button>
+              <button className="btn-danger" onClick={confirmModal.onConfirm}>Yes, delete permanently</button>
+            </div>
+          </div>
+        </div>
       )}
-    </button>
-  );
-}
-
-function PrivacyToggle({
-  label,
-  desc,
-  checked,
-  onChange,
-}: {
-  label: string;
-  desc: string;
-  checked: boolean;
-  onChange: () => void;
-}) {
-  return (
-    <div className="privacy-toggle-row">
-      <div className="privacy-toggle-text">
-        <div className="privacy-toggle-label">{label}</div>
-        <div className="privacy-toggle-desc">{desc}</div>
-      </div>
-      <button
-        className={`toggle ${checked ? "toggle-on" : ""}`}
-        onClick={onChange}
-        role="switch"
-        aria-checked={checked}
-      >
-        <span className="toggle-thumb" />
-      </button>
     </div>
   );
 }
+
+function DataCategoryCard({
+  icon, title, summary, note, badge, expanded, onToggle, action, children,
+}: {
+  id: string;
+  icon: string;
+  title: string;
+  summary: string;
+  note: string;
+  badge: React.ReactNode;
+  expanded: boolean;
+  onToggle: () => void;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={`data-category-card ${expanded ? "expanded" : ""}`}>
+      <div className="data-category-header" onClick={onToggle}>
+        <span className="data-category-icon">{icon}</span>
+        <div className="data-category-main">
+          <div className="data-category-title-row">
+            <span className="data-category-title">{title}</span>
+            {typeof badge === "string"
+              ? <span className="privacy-badge">{badge}</span>
+              : badge}
+          </div>
+          <div className="data-category-summary">{summary}</div>
+        </div>
+        <div className="data-category-end">
+          {action && <span onClick={(e) => e.stopPropagation()}>{action}</span>}
+          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        </div>
+      </div>
+      {expanded && (
+        <div className="data-category-body">
+          <div className="data-category-note">💡 {note}</div>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+

@@ -4,18 +4,20 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   Zap, FolderOpen, Brain, Plug, CheckCircle, ArrowRight, Shield,
-  AlertCircle, RefreshCw, Code2, Download,
+  AlertCircle, RefreshCw, Code2, Download, Info,
 } from "lucide-react";
 
 interface Props {
   onComplete: () => void;
 }
 
-const EDITORS = [
-  { id: "claude",   label: "Claude Code", hint: "~/.claude/settings.json" },
-  { id: "cursor",   label: "Cursor",      hint: "~/.cursor/mcp.json" },
-  { id: "windsurf", label: "Windsurf",    hint: "~/.codeium/windsurf/mcp_config.json" },
-  { id: "zed",      label: "Zed",         hint: "~/.config/zed/settings.json" },
+const ALL_EDITORS = [
+  { id: "claude",      label: "Claude Code",  hint: ".mcp.json" },
+  { id: "cursor",      label: "Cursor",        hint: ".cursor/mcp.json" },
+  { id: "windsurf",    label: "Windsurf",      hint: ".windsurf/mcp_config.json" },
+  { id: "zed",         label: "Zed",           hint: ".zed/settings.json" },
+  { id: "vscode",      label: "VS Code",       hint: ".vscode/mcp.json" },
+  { id: "antigravity", label: "Antigravity",   hint: ".agent/mcp.json" },
 ];
 
 const SYNAPSES_MODELS = [
@@ -56,13 +58,34 @@ export function Onboarding({ onComplete }: Props) {
   const unsubPullDone = useRef<(() => void) | null>(null);
 
   // Step 3 — Connect editor
+  const [detectedAgents, setDetectedAgents] = useState<string[]>([]);
   const [writtenEditors, setWrittenEditors] = useState<Record<string, boolean>>({});
   const [writingEditor, setWritingEditor] = useState<string | null>(null);
 
-  // Check Ollama on mount
+  // Check Ollama + detect installed agents on mount
   useEffect(() => {
     checkOllama();
+    invoke<string[]>("detect_installed_agents")
+      .then(setDetectedAgents)
+      .catch(() => {});
   }, []);
+
+  // When arriving at step 3 with a project, pre-check already-connected agents
+  useEffect(() => {
+    if (step !== 3 || !indexedPath) return;
+    const toCheck = detectedAgents.length > 0 ? detectedAgents : ALL_EDITORS.map((e) => e.id);
+    Promise.all(
+      toCheck.map((id) =>
+        invoke<boolean>("check_mcp_config", { editor: id, projectPath: indexedPath })
+          .then((ok) => (ok ? id : null))
+          .catch(() => null)
+      )
+    ).then((results) => {
+      const already: Record<string, boolean> = {};
+      results.forEach((id) => { if (id) already[id] = true; });
+      setWrittenEditors((prev) => ({ ...already, ...prev }));
+    });
+  }, [step, indexedPath]);
 
   async function checkOllama() {
     setOllamaStatus("checking");
@@ -143,7 +166,7 @@ export function Onboarding({ onComplete }: Props) {
   async function writeEditorConfig(editorId: string) {
     setWritingEditor(editorId);
     try {
-      await invoke<string>("write_mcp_config", { editor: editorId });
+      await invoke<string>("write_mcp_config", { editor: editorId, projectPath: indexedPath ?? "" });
       setWrittenEditors((p) => ({ ...p, [editorId]: true }));
     } catch (e) {
       alert(`Could not write config: ${e}`);
@@ -296,43 +319,68 @@ export function Onboarding({ onComplete }: Props) {
     <div key="connect" className="onboarding-step">
       <div className="onboarding-icon"><Plug size={48} /></div>
       <h1 className="onboarding-title">Connect your AI agent</h1>
-      <p className="onboarding-desc">
-        Click your editor to automatically add Synapses to its MCP config.
-        No copy-pasting needed.
-      </p>
 
-      <div className="editor-connect-grid">
-        {EDITORS.map((ed) => {
-          const done = writtenEditors[ed.id];
-          const writing = writingEditor === ed.id;
-          return (
-            <button
-              key={ed.id}
-              className={`editor-connect-card ${done ? "editor-connect-done" : ""}`}
-              onClick={() => !done && writeEditorConfig(ed.id)}
-              disabled={writing}
-            >
-              <div className="editor-connect-top">
-                <Code2 size={18} style={{ color: done ? "var(--success)" : "var(--accent)" }} />
-                <span className="editor-connect-label">{ed.label}</span>
-                {done && <CheckCircle size={14} style={{ color: "var(--success)", marginLeft: "auto" }} />}
-                {writing && <RefreshCw size={14} className="spin" style={{ marginLeft: "auto" }} />}
-              </div>
-              <span className="editor-connect-hint">
-                {done ? "✓ Added to " : "Writes to "}{ed.hint}
-              </span>
-            </button>
-          );
-        })}
-      </div>
+      {/* Project context */}
+      {indexedPath ? (
+        <div className="onboarding-project-badge">
+          <FolderOpen size={13} />
+          <span>{indexedPath.split("/").slice(-2).join("/")}</span>
+        </div>
+      ) : (
+        <div className="onboarding-warn-callout">
+          <AlertCircle size={14} />
+          <span>
+            No project indexed yet — go back to step 1 first. Synapses connects agents
+            to a specific project directory.
+          </span>
+        </div>
+      )}
 
-      <p className="onboarding-hint" style={{ marginTop: 12 }}>
-        Don't see your editor? Add <code>{`{ "transport": "http", "url": "http://127.0.0.1:11435/mcp" }`}</code> manually.
-      </p>
+      {indexedPath && (() => {
+        const visibleEditors = detectedAgents.length > 0
+          ? ALL_EDITORS.filter((e) => detectedAgents.includes(e.id))
+          : ALL_EDITORS;
+        return (
+          <>
+            <p className="onboarding-desc" style={{ marginTop: 10 }}>
+              {detectedAgents.length > 0
+                ? `${visibleEditors.length} agent${visibleEditors.length !== 1 ? "s" : ""} detected on your machine. Click to add Synapses — no copy-pasting needed.`
+                : "No agents detected. Click any to try adding Synapses manually."}
+            </p>
+            <div className="editor-connect-grid">
+              {visibleEditors.map((ed) => {
+                const done = writtenEditors[ed.id];
+                const writing = writingEditor === ed.id;
+                return (
+                  <button
+                    key={ed.id}
+                    className={`editor-connect-card ${done ? "editor-connect-done" : ""}`}
+                    onClick={() => !done && writeEditorConfig(ed.id)}
+                    disabled={writing}
+                  >
+                    <div className="editor-connect-top">
+                      <Code2 size={18} style={{ color: done ? "var(--success)" : "var(--accent)" }} />
+                      <span className="editor-connect-label">{ed.label}</span>
+                      {done && <CheckCircle size={14} style={{ color: "var(--success)", marginLeft: "auto" }} />}
+                      {writing && <RefreshCw size={14} className="spin" style={{ marginLeft: "auto" }} />}
+                    </div>
+                    <span className="editor-connect-hint">
+                      {done ? "✓ Connected · " : ""}{ed.hint}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="onboarding-hint" style={{ marginTop: 12 }}>
+              Not listed? Add <code>{`{ "transport": "http", "url": "http://127.0.0.1:11435/mcp" }`}</code> to your agent's MCP config.
+            </p>
+          </>
+        );
+      })()}
 
       <div className="step-nav">
         <button className="btn-ghost" onClick={() => setStep(2)}>Back</button>
-        <button className="btn-primary" onClick={() => setStep(4)}>
+        <button className="btn-primary" onClick={() => setStep(4)} disabled={!indexedPath}>
           {Object.keys(writtenEditors).length > 0 ? "Continue" : "Skip for now"} <ArrowRight size={14} />
         </button>
       </div>
@@ -345,17 +393,23 @@ export function Onboarding({ onComplete }: Props) {
       </div>
       <h1 className="onboarding-title">Your data stays local</h1>
       <p className="onboarding-desc">
-        Synapses stores everything on your machine. No cloud sync. No external telemetry.
-        No account required.
+        Synapses stores everything on your machine. No cloud sync. No telemetry. No account.
       </p>
       <div className="privacy-checklist">
-        <PrivacyItem checked label="Code graph" desc="Your indexed codebase — required for the tool to function" locked />
+        <PrivacyItem checked label="Code graph" desc="Your indexed codebase — stays on this machine, never uploaded" locked />
         <PrivacyItem checked label="Session logs" desc="Tool call counts and latency for local analytics (no code content)" />
-        <PrivacyItem checked label="Web cache" desc="Package docs and pages fetched by agents (built-in doc cache)" />
+        <PrivacyItem checked label="Web cache" desc="Docs fetched by agents — cached locally, not forwarded anywhere" />
       </div>
-      <p className="onboarding-hint" style={{ textAlign: "center", width: "100%" }}>
-        Change these anytime in <strong>Privacy & Data</strong>.
-      </p>
+
+      <div className="privacy-agent-note">
+        <Info size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+        <span>
+          When your agent (Claude, GPT-4, etc.) calls Synapses, it receives context and
+          sends it to its own cloud service to generate a response. Synapses controls
+          what context is prepared — not where your agent sends it.
+        </span>
+      </div>
+
       <div className="step-nav">
         <button className="btn-ghost" onClick={() => setStep(3)}>Back</button>
         <button className="btn-primary" onClick={() => setStep(5)}>
@@ -388,24 +442,6 @@ export function Onboarding({ onComplete }: Props) {
       </div>
       {steps[step]}
     </div>
-  );
-}
-
-function OptionCard({
-  title, desc, onClick, secondary, disabled,
-}: {
-  title: string; desc: string; onClick: () => void; secondary?: boolean; disabled?: boolean;
-}) {
-  return (
-    <button
-      className={`option-card ${secondary ? "option-card-secondary" : ""}`}
-      onClick={onClick}
-      disabled={disabled}
-      style={disabled ? { opacity: 0.45, cursor: "not-allowed" } : undefined}
-    >
-      <div className="option-title">{title}</div>
-      <div className="option-desc">{desc}</div>
-    </button>
   );
 }
 

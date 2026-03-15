@@ -157,23 +157,32 @@ fn set_onboarding_done() {
 // ── Tauri commands — data / privacy ──────────────────────────────────────────
 
 /// Returns file sizes (bytes) of key data files in ~/.synapses/
+/// All project indexes live in ~/.synapses/cache/*.db since the Phase 3–5 merge.
+/// pulse.sqlite holds analytics. Returns "synapses" = sum of all cache DBs.
 #[tauri::command]
 fn get_data_sizes() -> HashMap<String, u64> {
     let data_dir = sidecar::synapses_data_dir();
-    // brain.db and pulse.db no longer exist — brain and pulse are in-process
-    // within the singleton daemon binary since the Phase 3–5 architecture merge.
-    // web_cache is now a table inside synapses.db — no separate scout.db
-    let files = [
-        ("synapses", "synapses.db"),
-    ];
     let mut result = HashMap::new();
-    for (key, filename) in &files {
-        let path = data_dir.join(filename);
-        result.insert(
-            key.to_string(),
-            std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
-        );
+
+    // Sum all *.db files in ~/.synapses/cache/ (one per indexed project)
+    let cache_dir = data_dir.join("cache");
+    let mut cache_total: u64 = 0;
+    if let Ok(entries) = std::fs::read_dir(&cache_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("db") {
+                cache_total += std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            }
+        }
     }
+    result.insert("synapses".to_string(), cache_total);
+
+    // pulse.sqlite holds analytics data
+    let pulse_size = std::fs::metadata(data_dir.join("pulse.sqlite"))
+        .map(|m| m.len())
+        .unwrap_or(0);
+    result.insert("pulse".to_string(), pulse_size);
+
     result
 }
 
@@ -276,10 +285,10 @@ fn write_brain_config(content: String) -> Result<(), String> {
     std::fs::write(&path, content).map_err(|e| e.to_string())
 }
 
-/// Returns recent lines from the singleton daemon log file (~/.synapses/daemon.log)
+/// Returns recent lines from the singleton daemon log file (~/.synapses/logs/daemon.log)
 #[tauri::command]
 fn get_log_lines(n: usize) -> Vec<String> {
-    let log_path = sidecar::synapses_data_dir().join("daemon.log");
+    let log_path = sidecar::synapses_data_dir().join("logs").join("daemon.log");
     if let Ok(content) = std::fs::read_to_string(log_path) {
         let lines: Vec<String> = content.lines().map(String::from).collect();
         let start = if lines.len() > n { lines.len() - n } else { 0 };
@@ -287,6 +296,139 @@ fn get_log_lines(n: usize) -> Vec<String> {
     } else {
         vec![]
     }
+}
+
+/// Returns aggregate counts of knowledge accumulated across all indexed project stores.
+/// Queries each ~/.synapses/cache/*.db for plans, tasks, episodes (decisions), and dynamic_rules.
+/// Returns { plans, tasks, decisions, rules } — silently skips unreadable DBs.
+#[tauri::command]
+fn get_knowledge_base_stats() -> HashMap<String, u64> {
+    let cache_dir = sidecar::synapses_data_dir().join("cache");
+    let mut plans: u64 = 0;
+    let mut tasks: u64 = 0;
+    let mut decisions: u64 = 0;
+    let mut rules: u64 = 0;
+
+    let entries = match std::fs::read_dir(&cache_dir) {
+        Ok(e) => e,
+        Err(_) => {
+            let mut m = HashMap::new();
+            m.insert("plans".to_string(), 0u64);
+            m.insert("tasks".to_string(), 0u64);
+            m.insert("decisions".to_string(), 0u64);
+            m.insert("rules".to_string(), 0u64);
+            return m;
+        }
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("db") {
+            continue;
+        }
+        let path_str = path.to_string_lossy().to_string();
+        for (table, counter) in [
+            ("plans", &mut plans),
+            ("tasks", &mut tasks),
+            ("episodes", &mut decisions),
+            ("dynamic_rules", &mut rules),
+        ] {
+            if let Ok(out) = std::process::Command::new("sqlite3")
+                .arg(&path_str)
+                .arg(format!("SELECT COUNT(*) FROM {table};"))
+                .output()
+            {
+                if let Ok(s) = String::from_utf8(out.stdout) {
+                    if let Ok(n) = s.trim().parse::<u64>() {
+                        *counter += n;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut m = HashMap::new();
+    m.insert("plans".to_string(), plans);
+    m.insert("tasks".to_string(), tasks);
+    m.insert("decisions".to_string(), decisions);
+    m.insert("rules".to_string(), rules);
+    m
+}
+
+/// Clears all agent memory (plans, tasks, episodes, memories, annotations)
+/// across all indexed projects by calling `synapses memory clear -all`.
+/// Preserves the code graph (nodes, edges).
+#[tauri::command]
+async fn clear_agent_memory() -> Result<(), String> {
+    let bin = find_binary("synapses").ok_or_else(|| "synapses binary not found".to_string())?;
+    let out = std::process::Command::new(bin)
+        .args(["memory", "clear", "-all"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&out.stderr).to_string()) }
+}
+
+/// Clears activity logs (tool_calls) across all indexed projects AND pulse.sqlite.
+#[tauri::command]
+async fn clear_activity_logs() -> Result<(), String> {
+    // 1. Clear per-project tool_calls via CLI
+    let bin = find_binary("synapses").ok_or_else(|| "synapses binary not found".to_string())?;
+    let out = std::process::Command::new(bin)
+        .args(["memory", "clear", "-all", "--logs"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).to_string());
+    }
+
+    // 2. Also clear the global pulse.sqlite analytics store
+    let pulse_path = sidecar::synapses_data_dir().join("pulse.sqlite");
+    if pulse_path.exists() {
+        // Open with rusqlite-compatible connection via std::process to avoid adding a new dep.
+        // Use the synapses binary to run raw SQL, or just remove + let daemon recreate.
+        // Safest: DELETE FROM each known table directly via sqlite3 if available,
+        // otherwise remove the file entirely (daemon will recreate it on next start).
+        let cleared = std::process::Command::new("sqlite3")
+            .arg(&pulse_path)
+            .arg("DELETE FROM tool_calls; DELETE FROM sessions;")
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !cleared {
+            // sqlite3 CLI not available — remove the file; daemon recreates schema on next start
+            let _ = std::fs::remove_file(&pulse_path);
+        }
+    }
+
+    Ok(())
+}
+
+/// Clears all web cache entries by calling `synapses cache clear`
+#[tauri::command]
+async fn clear_web_cache() -> Result<String, String> {
+    let bin = find_binary("synapses").ok_or_else(|| "synapses binary not found".to_string())?;
+    let out = std::process::Command::new(bin)
+        .args(["cache", "clear"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok("Web cache cleared".to_string())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).to_string())
+    }
+}
+
+/// Wipes all data: resets all project indexes, removes daemon log and app settings.
+#[tauri::command]
+fn wipe_all_data() -> Result<(), String> {
+    let bin = find_binary("synapses").ok_or_else(|| "synapses binary not found".to_string())?;
+    let _ = std::process::Command::new(&bin)
+        .args(["reset", "-all"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(sidecar::synapses_data_dir().join("logs").join("daemon.log"));
+    let _ = std::fs::remove_file(sidecar::synapses_data_dir().join("app_settings.json"));
+    Ok(())
 }
 
 /// Reads ~/.synapses/app_settings.json for app-level preferences
@@ -300,59 +442,117 @@ fn read_app_settings() -> HashMap<String, serde_json::Value> {
     }
 }
 
-/// Writes the synapses MCP entry into the given editor's config file.
-/// Merges into existing config rather than overwriting.
-/// Returns the path written to.
+/// Delegates to `synapses connect --agent <editor> --path <project_path>`.
+/// The synapses binary writes all agent-specific files:
+///   - MCP config (agent-specific path and format)
+///   - Guidance/rules file (.claude/CLAUDE.md, .cursor/rules/synapses.mdc, .windsurfrules)
+///   - For Claude: .claude/settings.json (hooks + permissions)
+/// Returns the stdout from the connect command.
 #[tauri::command]
-fn write_mcp_config(editor: String) -> Result<String, String> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    let home = std::path::PathBuf::from(home);
+fn write_mcp_config(editor: String, project_path: String) -> Result<String, String> {
+    let bin = find_binary("synapses")
+        .ok_or_else(|| "synapses binary not found".to_string())?;
+    let out = std::process::Command::new(bin)
+        .args(["connect", "--agent", &editor, "--path", &project_path])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).to_string())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).to_string())
+    }
+}
+
+/// Checks whether the Synapses MCP entry already exists in a project's agent config.
+#[tauri::command]
+fn check_mcp_config(editor: String, project_path: String) -> bool {
+    let project = std::path::PathBuf::from(&project_path);
 
     let config_path = match editor.as_str() {
-        "claude"    => home.join(".claude").join("settings.json"),
-        "cursor"    => home.join(".cursor").join("mcp.json"),
-        "windsurf"  => home.join(".codeium").join("windsurf").join("mcp_config.json"),
-        "zed"       => home.join(".config").join("zed").join("settings.json"),
-        _           => return Err(format!("Unknown editor: {}", editor)),
+        "claude"      => project.join(".mcp.json"),
+        "cursor"      => project.join(".cursor").join("mcp.json"),
+        "windsurf"    => project.join(".windsurf").join("mcp_config.json"),
+        "zed"         => project.join(".zed").join("settings.json"),
+        "vscode"      => project.join(".vscode").join("mcp.json"),
+        "antigravity" => project.join(".agent").join("mcp.json"),
+        _             => return false,
     };
 
-    // Read existing config or start fresh
-    let mut config: serde_json::Value = if config_path.exists() {
-        let content = std::fs::read_to_string(&config_path).map_err(|e| e.to_string())?;
-        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
-    } else {
-        serde_json::json!({})
+    if !config_path.exists() { return false; }
+
+    let content = match std::fs::read_to_string(&config_path) {
+        Ok(c) => c,
+        Err(_) => return false,
     };
 
-    // Create parent dirs if needed
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let config: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    match editor.as_str() {
+        "zed"    => config["context_servers"]["synapses"].is_object(),
+        "vscode" => config["servers"]["synapses"].is_object(),
+        _        => config["mcpServers"]["synapses"].is_object(), // claude, cursor, windsurf, antigravity
+    }
+}
+
+/// Returns agent IDs that appear to be installed on this machine based on filesystem detection.
+#[tauri::command]
+fn detect_installed_agents() -> Vec<String> {
+    let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    let mut detected = Vec::new();
+
+    // Claude Code (CLI — no .app bundle, look for ~/.claude)
+    if home.join(".claude").exists() {
+        detected.push("claude".to_string());
     }
 
-    // HTTP MCP transport: daemon runs at 127.0.0.1:11435 and serves /mcp.
-    let synapses_entry = serde_json::json!({
-        "transport": "http",
-        "url": "http://127.0.0.1:11435/mcp"
-    });
-
-    if editor == "zed" {
-        // Zed uses "context_servers" with settings.url for HTTP servers
-        if !config["context_servers"].is_object() {
-            config["context_servers"] = serde_json::json!({});
-        }
-        config["context_servers"]["synapses"] = serde_json::json!({
-            "settings": { "url": "http://127.0.0.1:11435/mcp" }
-        });
+    // Cursor
+    let cursor_found = if cfg!(target_os = "macos") {
+        std::path::Path::new("/Applications/Cursor.app").exists() || home.join(".cursor").exists()
     } else {
-        if !config["mcpServers"].is_object() {
-            config["mcpServers"] = serde_json::json!({});
-        }
-        config["mcpServers"]["synapses"] = synapses_entry;
-    }
+        home.join(".cursor").exists() || home.join(".config").join("cursor").exists()
+    };
+    if cursor_found { detected.push("cursor".to_string()); }
 
-    let content = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
-    std::fs::write(&config_path, content).map_err(|e| e.to_string())?;
-    Ok(config_path.to_string_lossy().to_string())
+    // Windsurf
+    let windsurf_found = if cfg!(target_os = "macos") {
+        std::path::Path::new("/Applications/Windsurf.app").exists()
+            || home.join(".codeium").join("windsurf").exists()
+    } else {
+        home.join(".codeium").join("windsurf").exists()
+    };
+    if windsurf_found { detected.push("windsurf".to_string()); }
+
+    // Zed
+    let zed_found = if cfg!(target_os = "macos") {
+        std::path::Path::new("/Applications/Zed.app").exists()
+            || home.join(".config").join("zed").exists()
+    } else {
+        home.join(".config").join("zed").exists()
+    };
+    if zed_found { detected.push("zed".to_string()); }
+
+    // VS Code (covers GitHub Copilot agent mode, MCP support in VS Code 1.99+)
+    let vscode_found = if cfg!(target_os = "macos") {
+        std::path::Path::new("/Applications/Visual Studio Code.app").exists()
+            || home.join(".vscode").exists()
+    } else {
+        home.join(".vscode").exists() || home.join(".config").join("Code").exists()
+    };
+    if vscode_found { detected.push("vscode".to_string()); }
+
+    // Antigravity (Google's agentic IDE — stores global config in ~/.gemini/)
+    let antigravity_found = if cfg!(target_os = "macos") {
+        std::path::Path::new("/Applications/Antigravity.app").exists()
+            || home.join(".gemini").exists()
+    } else {
+        home.join(".gemini").exists()
+    };
+    if antigravity_found { detected.push("antigravity".to_string()); }
+
+    detected
 }
 
 /// Writes ~/.synapses/app_settings.json
@@ -818,15 +1018,22 @@ pub fn run() {
             set_onboarding_done,
             // Data / privacy
             get_data_sizes,
+            get_knowledge_base_stats,
             open_data_dir,
             get_system_ram_gb,
             set_ollama_max_models,
             read_brain_config,
             write_brain_config,
             get_log_lines,
+            clear_agent_memory,
+            clear_activity_logs,
+            clear_web_cache,
+            wipe_all_data,
             read_app_settings,
             write_app_settings,
             write_mcp_config,
+            check_mcp_config,
+            detect_installed_agents,
             // Install & update
             register_launch_agent,
             check_ollama,
