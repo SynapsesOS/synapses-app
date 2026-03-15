@@ -15,6 +15,7 @@ import { Analytics } from "./pages/Analytics";
 import { Privacy } from "./pages/Privacy";
 import { Memory } from "./pages/Memory";
 import { Agents } from "./pages/Agents";
+import { Explorer } from "./pages/Explorer";
 import "./App.css";
 
 // Listens to Tauri service events and fires toasts
@@ -47,6 +48,7 @@ function AppShell() {
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/projects" element={<Projects />} />
+              <Route path="/explorer" element={<Explorer />} />
               <Route path="/agents" element={<Agents />} />
               <Route path="/models" element={<Models />} />
               <Route path="/analytics" element={<Analytics />} />

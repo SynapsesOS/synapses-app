@@ -3057,3 +3057,218 @@ html, body, #root {
 }
 .an-model-select:hover { border-color: var(--border-hi); }
 .an-model-select:focus { outline: none; border-color: var(--accent); }
+
+/* ── Explorer page ──────────────────────────────────────────────────────── */
+.explorer-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-bottom: 32px;
+}
+
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+
+.explorer-project-select {
+  appearance: none;
+  padding: 8px 12px 8px 12px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%236b7a9e' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
+}
+
+.explorer-search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 12px;
+  transition: border-color 0.13s;
+}
+
+.explorer-search-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.explorer-search-icon {
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.explorer-search-input {
+  flex: 1;
+  background: none;
+  border: none;
+  color: var(--text);
+  padding: 8px 0;
+  outline: none;
+  font-size: 13px;
+}
+
+.explorer-search-input::placeholder {
+  color: var(--text-dim);
+}
+
+.explorer-search-input:disabled {
+  opacity: 0.6;
+}
+
+.explorer-spinner {
+  color: var(--accent);
+  animation: spin 1s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.explorer-results {
+  margin-top: 24px;
+}
+
+/* ── Table ──────────────────────────────────────────────────────────────── */
+.an-table {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.an-table-head {
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.an-table-body {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  max-height: 600px;
+}
+
+.an-table-row {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  padding: 0;
+  transition: background 0.12s;
+}
+
+.an-table-row:last-child {
+  border-bottom: none;
+}
+
+.an-table-head .an-table-row:hover {
+  background: none;
+}
+
+.an-table-body .an-table-row:hover {
+  background: var(--surface2);
+}
+
+.an-table-cell {
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.an-table-head .an-table-cell {
+  font-weight: 600;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  padding: 10px 14px;
+}
+
+.an-table-cell-mono {
+  font-family: "JetBrains Mono", "Fira Code", Menlo, monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ── Domain badge ───────────────────────────────────────────────────────── */
+.domain-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 99px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  white-space: nowrap;
+  border: 1px solid;
+}
+
+.domain-badge--api {
+  background: var(--accent-soft);
+  color: var(--accent-h);
+  border-color: rgba(99, 102, 241, 0.3);
+}
+
+.domain-badge--infra {
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--warning);
+  border-color: rgba(245, 158, 11, 0.25);
+}
+
+.domain-badge--docs {
+  background: var(--success-soft);
+  color: var(--success);
+  border-color: rgba(16, 185, 129, 0.25);
+}
+
+.domain-badge--issues {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.domain-badge--custom {
+  background: var(--surface3);
+  color: var(--text-muted);
+  border-color: var(--border-hi);
+}
+
+/* ── Entity type badge ──────────────────────────────────────────────────── */
+.entity-type-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--surface3);
+  color: var(--text-dim);
+  text-transform: lowercase;
+  border: 1px solid var(--border-hi);
+}
+
+.empty-state-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 6px;
+}

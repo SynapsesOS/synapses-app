@@ -16,3 +16,20 @@ export interface Project {
   node_count?: number;
   last_indexed?: string;
 }
+
+export type EntityType = "function" | "method" | "struct" | "interface" | "file" | "package" | "unknown";
+export type DomainType = "code" | "api" | "infra" | "docs" | "issues" | "custom";
+
+export interface EntityRow {
+  id: string;
+  name: string;
+  type: EntityType;
+  file: string;
+  domain: DomainType;
+}
+
+export interface SearchEntitiesResponse {
+  entities: EntityRow[];
+  total: number;
+  query: string;
+}

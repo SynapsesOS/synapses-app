@@ -9,6 +9,7 @@ import {
   Shield,
   Settings,
   Zap,
+  Search,
 } from "lucide-react";
 
 interface NavItem {
@@ -34,6 +35,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: "Intelligence",
     items: [
+      { to: "/explorer", icon: Search, label: "Explorer" },
       { to: "/models", icon: Brain, label: "Models & Brain" },
     ],
   },
