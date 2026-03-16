@@ -134,6 +134,57 @@ async fn run_synapses_cmd(args: Vec<String>) -> Result<String, String> {
     }
 }
 
+/// Registers a single Synapses AI tier identity via `synapses brain register <tier>`.
+/// Non-blocking: uses tokio::task::spawn_blocking so the async worker is not starved.
+/// Emits "brain-identity-status" events:
+///   { tier, status: "registering" }  — when starting
+///   { tier, status: "done" }         — on success
+///   { tier, status: "error", message } — on failure
+#[tauri::command]
+async fn register_brain_identity(tier: String, app: AppHandle) -> Result<(), String> {
+    let bin = find_binary("synapses")
+        .ok_or_else(|| "synapses binary not found in ~/.synapses/bin or PATH".to_string())?;
+
+    let _ = app.emit("brain-identity-status", serde_json::json!({
+        "tier": tier, "status": "registering"
+    }));
+
+    let tier_clone = tier.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(bin)
+            .args(["brain", "register", &tier_clone])
+            .output()
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    match result {
+        Ok(out) if out.status.success() => {
+            let _ = app.emit("brain-identity-status", serde_json::json!({
+                "tier": tier, "status": "done"
+            }));
+            Ok(())
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+            let msg = if !stderr.trim().is_empty() { stderr } else { stdout };
+            let msg = msg.trim().to_string();
+            let _ = app.emit("brain-identity-status", serde_json::json!({
+                "tier": tier, "status": "error", "message": msg
+            }));
+            Err(format!("{}: {}", tier, msg))
+        }
+        Err(e) => {
+            let _ = app.emit("brain-identity-status", serde_json::json!({
+                "tier": tier, "status": "error", "message": &e
+            }));
+            Err(e)
+        }
+    }
+}
+
 // ── Tauri commands — app state ────────────────────────────────────────────────
 
 #[tauri::command]
@@ -1012,6 +1063,7 @@ pub fn run() {
             enable_service,
             // CLI
             run_synapses_cmd,
+            register_brain_identity,
             // App state
             get_synapses_data_dir,
             get_onboarding_done,

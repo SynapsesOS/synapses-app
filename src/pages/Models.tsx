@@ -15,6 +15,7 @@ import {
   Zap,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useToast } from "../context/ToastContext";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -128,14 +129,6 @@ const QUALITY_MODES = [
   { key: "enterprise", label: "Enterprise", desc: "Gate: full tests + integration tests, all exports documented, PR review sign-off, CHANGELOG updated." },
 ];
 
-// ── Utility helpers ───────────────────────────────────────────────────────────
-
-// Strip ANSI escape codes so CLI output is readable in a browser <pre>.
-function stripAnsi(s: string): string {
-  // eslint-disable-next-line no-control-regex
-  return s.replace(/\x1b\[[0-9;]*m/g, "");
-}
-
 // ── Level helpers ─────────────────────────────────────────────────────────────
 
 function recommendedLevel(ramGb: number): IntelligenceLevel {
@@ -178,6 +171,7 @@ interface BrainConfig {
 interface InstalledModel { name: string; size: number; modified_at: string; }
 interface ChatMessage    { role: "user" | "assistant"; content: string; }
 type PullStatus   = "idle" | "pulling" | "done" | "error";
+type TierStatus   = "idle" | "registering" | "done" | "error";
 type PullProgress = { completed?: number; total?: number; status?: string };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -330,7 +324,8 @@ export function Models() {
 
   // Brain setup state
   const [setupRunning, setSetupRunning] = useState(false);
-  const [setupOutput, setSetupOutput]   = useState("");
+  const [tierStatus, setTierStatus]     = useState<Record<string, TierStatus>>({});
+  const [tierErrors, setTierErrors]     = useState<Record<string, string>>({});
 
   // ── Derived ────────────────────────────────────────────────────────────────
 
@@ -395,6 +390,23 @@ export function Models() {
     if (chatScrollRef.current)
       chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
   }, [chatMessages]);
+
+  // ── Brain identity event listener ──────────────────────────────────────────
+
+  useEffect(() => {
+    let cleanup: (() => void) | null = null;
+    listen<{ tier: string; status: string; message?: string }>(
+      "brain-identity-status",
+      (event) => {
+        const { tier, status, message } = event.payload;
+        setTierStatus((prev) => ({ ...prev, [tier]: status as TierStatus }));
+        if (status === "error" && message) {
+          setTierErrors((prev) => ({ ...prev, [tier]: message }));
+        }
+      }
+    ).then((fn) => { cleanup = fn; });
+    return () => { cleanup?.(); };
+  }, []);
 
   // ── Config helpers ─────────────────────────────────────────────────────────
 
@@ -482,29 +494,57 @@ export function Models() {
 
   // ── Brain setup ────────────────────────────────────────────────────────────
 
-  async function setupBrain() {
-    setSetupRunning(true);
-    setSetupOutput("");
+  function tierNeedsRegister(tag: string): boolean {
+    const st = tierStatus[tag];
+    if (st === "registering" || st === "done") return false;
+    if (st === "error") return true; // allow "register all" to retry errored tiers
+    return missingIds.some((id) => id.tag === tag);
+  }
+
+  async function retryTier(tag: string) {
+    setTierErrors((prev) => { const n = { ...prev }; delete n[tag]; return n; });
     try {
-      // --skip-pull:  base model must already be downloaded before calling this.
-      //               The UI ensures qwen3.5:2b is pulled first.
-      // --skip-smoke: smoke tests block the Tauri main thread up to 225 s (5 tiers × 45 s).
-      //               The UI verifies registration independently via /api/tags after this call.
-      // --no-color:   ANSI escape codes appear as garbage in a browser <pre>.
-      const out = await invoke<string>("run_synapses_cmd", {
-        args: ["brain", "setup", "--skip-pull", "--skip-smoke", "--no-color",
-               "--ollama", activeOllamaUrl,
-               "--mode", currentLevel !== "custom" ? currentLevel : "standard"],
-      });
-      setSetupOutput(stripAnsi(out));
-      addToast("success", "AI tier identities registered successfully.");
+      await invoke<void>("register_brain_identity", { tier: tag });
       await refreshModels();
-    } catch (e) {
-      setSetupOutput(stripAnsi(String(e)));
-      addToast("error", "Brain setup failed — see output below.");
-    } finally {
-      setSetupRunning(false);
+    } catch { /* tierStatus + tierErrors updated via event listener */ }
+  }
+
+  async function setupBrain() {
+    if (!ollamaStatus?.running) return;
+    const toRegister = BRAIN_IDENTITIES.filter((id) => tierNeedsRegister(id.tag));
+    if (toRegister.length === 0) return;
+
+    setSetupRunning(true);
+    // Clear previous errors for tiers we're about to register
+    setTierErrors((prev) => {
+      const next = { ...prev };
+      for (const id of toRegister) delete next[id.tag];
+      return next;
+    });
+
+    // Register all in parallel — ollama create is fast (~1-3s, no download)
+    const results = await Promise.allSettled(
+      toRegister.map((id) => invoke<void>("register_brain_identity", { tier: id.tag }))
+    );
+
+    const failed = results.filter((r) => r.status === "rejected").length;
+
+    if (failed === 0) {
+      // Enable brain in config with the selected intelligence level
+      const level = currentLevel !== "custom" ? currentLevel : recLevel;
+      const updated: BrainConfig = { ...brainConfig, ...INTELLIGENCE_LEVELS[level].config };
+      (updated as Record<string, unknown>)["enabled"] = true;
+      try {
+        await writeBrainConfig(updated);
+        setBrainConfig(updated);
+      } catch { /* best-effort — brain.json write failure is non-fatal */ }
+      addToast("success", `${toRegister.length} AI tier identit${toRegister.length === 1 ? "y" : "ies"} registered. Brain enabled.`);
+    } else {
+      addToast("error", `${failed} tier${failed > 1 ? "s" : ""} failed — see errors on the rows above.`);
     }
+
+    await refreshModels();
+    setSetupRunning(false);
   }
 
   // ── Delete ─────────────────────────────────────────────────────────────────
@@ -746,16 +786,29 @@ export function Models() {
                     Checking Ollama...
                   </div>
                 ) : BRAIN_IDENTITIES.map((id) => {
-                  const registered = installedNames.some((n) => normName(n) === id.tag);
+                  const registered   = installedNames.some((n) => normName(n) === id.tag);
+                  const tStatus      = tierStatus[id.tag];
+                  const tError       = tierErrors[id.tag];
+                  const isRegistering = tStatus === "registering";
+                  const isError       = tStatus === "error";
+                  const isDone        = tStatus === "done" || registered;
+
                   return (
                     <div key={id.tag} style={{
                       display: "flex", alignItems: "flex-start", gap: 10,
                       padding: "8px 10px", borderRadius: "var(--radius-sm)",
-                      background: registered ? "rgba(34,197,94,0.05)" : "var(--surface)",
-                      border: `1px solid ${registered ? "rgba(34,197,94,0.2)" : "var(--border)"}`,
+                      background: isError ? "rgba(239,68,68,0.05)" : isDone ? "rgba(34,197,94,0.05)" : "var(--surface)",
+                      border: `1px solid ${isError ? "rgba(239,68,68,0.2)" : isDone ? "rgba(34,197,94,0.2)" : "var(--border)"}`,
+                      transition: "background 0.2s, border-color 0.2s",
                     }}>
-                      <span style={{ fontSize: 11, marginTop: 1, flexShrink: 0, color: registered ? "var(--success)" : "var(--text-dim)" }}>
-                        {registered ? "✓" : "○"}
+                      <span style={{
+                        fontSize: 11, marginTop: 1, flexShrink: 0, lineHeight: 1,
+                        color: isError ? "var(--danger)" : isDone ? "var(--success)" : isRegistering ? "var(--accent)" : "var(--text-dim)",
+                        display: "flex", alignItems: "center",
+                      }}>
+                        {isRegistering
+                          ? <RefreshCw size={11} className="spin" />
+                          : isDone ? "✓" : isError ? "✗" : "○"}
                       </span>
                       <div style={{ flex: 1 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
@@ -764,48 +817,69 @@ export function Models() {
                             background: "var(--surface2)", color: "var(--text-dim)", border: "1px solid var(--border)" }}>
                             {id.tier}
                           </span>
+                          {isRegistering && (
+                            <span style={{ fontSize: 10, color: "var(--accent)", fontStyle: "italic" }}>
+                              registering...
+                            </span>
+                          )}
                         </div>
                         <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{id.role}</div>
-                        <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, fontStyle: "italic" }}>{id.note}</div>
+                        {isError && tError ? (
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+                            <span style={{ fontSize: 10, color: "var(--danger)", flex: 1, lineHeight: 1.4 }}>
+                              {tError.length > 140 ? tError.slice(0, 140) + "…" : tError}
+                            </span>
+                            <button
+                              className="btn-ghost"
+                              style={{ fontSize: 10, padding: "2px 8px", flexShrink: 0 }}
+                              onClick={() => retryTier(id.tag)}
+                              disabled={setupRunning}
+                            >
+                              Retry
+                            </button>
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, fontStyle: "italic" }}>{id.note}</div>
+                        )}
                       </div>
                     </div>
                   );
                 })}
               </div>
 
-              {/* Register button — only shown when base model is installed but identities are missing */}
-              {baseModelInstalled && missingIds.length > 0 && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  <button
-                    className="btn-primary"
-                    style={{ fontSize: 12, padding: "7px 16px", alignSelf: "flex-start" }}
-                    onClick={setupBrain}
-                    disabled={setupRunning}
-                  >
-                    {setupRunning
-                      ? <><RefreshCw size={12} className="spin" /> Registering tiers...</>
-                      : <><Zap size={12} /> Register {missingIds.length} missing tier{missingIds.length > 1 ? "s" : ""}</>
-                    }
-                  </button>
-                  {setupOutput && (
-                    <pre style={{
-                      fontSize: 10, color: "var(--text-muted)", background: "var(--surface)",
-                      border: "1px solid var(--border)", borderRadius: "var(--radius-sm)",
-                      padding: "8px 10px", overflowX: "auto", maxHeight: 180, whiteSpace: "pre-wrap",
-                      wordBreak: "break-word",
-                    }}>
-                      {setupOutput}
-                    </pre>
-                  )}
-                </div>
-              )}
-
-              {/* Not installed yet — explain that base model must come first */}
-              {!baseModelInstalled && missingIds.length > 0 && (
-                <p style={{ fontSize: 11, color: "var(--text-dim)", margin: 0 }}>
-                  Download qwen3.5:2b first — then register the AI tier identities in one click.
-                </p>
-              )}
+              {/* Register button — gated on base model installed + ollama running */}
+              {(() => {
+                const toRegister = BRAIN_IDENTITIES.filter((id) => tierNeedsRegister(id.tag));
+                if (!baseModelInstalled) {
+                  return (
+                    <p style={{ fontSize: 11, color: "var(--text-dim)", margin: 0 }}>
+                      Download qwen3.5:2b first — then register the AI tier identities in one click.
+                    </p>
+                  );
+                }
+                if (toRegister.length === 0) return null;
+                return (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {ollamaStatus?.running ? (
+                      <button
+                        className="btn-primary"
+                        style={{ fontSize: 12, padding: "7px 16px", alignSelf: "flex-start" }}
+                        onClick={setupBrain}
+                        disabled={setupRunning}
+                      >
+                        {setupRunning
+                          ? <><RefreshCw size={12} className="spin" /> Registering...</>
+                          : <><Zap size={12} /> Register {toRegister.length} tier{toRegister.length > 1 ? "s" : ""}</>
+                        }
+                      </button>
+                    ) : (
+                      <p style={{ fontSize: 11, color: "var(--warning)", margin: 0 }}>
+                        Ollama is offline — start Ollama to register AI tier identities.
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </div>
