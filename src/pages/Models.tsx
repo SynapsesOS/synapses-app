@@ -504,7 +504,7 @@ export function Models() {
   async function retryTier(tag: string) {
     setTierErrors((prev) => { const n = { ...prev }; delete n[tag]; return n; });
     try {
-      await invoke<void>("register_brain_identity", { tier: tag });
+      await invoke<void>("register_brain_identity", { tier: tag, ollamaUrl: activeOllamaUrl });
       await refreshModels();
     } catch { /* tierStatus + tierErrors updated via event listener */ }
   }
@@ -522,9 +522,9 @@ export function Models() {
       return next;
     });
 
-    // Register all in parallel — ollama create is fast (~1-3s, no download)
+    // Register all in parallel — /api/create is fast (~200ms, just writes a manifest)
     const results = await Promise.allSettled(
-      toRegister.map((id) => invoke<void>("register_brain_identity", { tier: id.tag }))
+      toRegister.map((id) => invoke<void>("register_brain_identity", { tier: id.tag, ollamaUrl: activeOllamaUrl }))
     );
 
     const failed = results.filter((r) => r.status === "rejected").length;

@@ -134,55 +134,194 @@ async fn run_synapses_cmd(args: Vec<String>) -> Result<String, String> {
     }
 }
 
-/// Registers a single Synapses AI tier identity via `synapses brain register <tier>`.
-/// Non-blocking: uses tokio::task::spawn_blocking so the async worker is not starved.
+// ── Embedded Modelfile content ────────────────────────────────────────────────
+// Single source of truth for the Tauri app. Kept in sync with
+// synapses/cmd/synapses/brain_setup.go — update both if Modelfiles change.
+// Uses r##"..."## raw strings so the embedded """ triple-quotes are safe.
+
+const MODELFILE_SENTRY: &str = r##"FROM qwen3.5:2b
+
+SYSTEM """You are the Synapses Sentry, a code entity summarizer for a code intelligence graph.
+
+Given a code entity (name, type, package, and source code), write a 2-3 sentence technical briefing covering: what it does, its role in the system, and any important patterns or concerns.
+
+Do not write code. Describe the entity in plain English sentences only.
+Output ONLY valid JSON with no other text: {"summary": "2-3 sentence briefing", "tags": ["domain_tag1", "domain_tag2"]}
+
+Tags should be 1-3 domain labels from: auth, http, db, cache, queue, config, util, test, cli, graph, store, parser, middleware, api, worker."""
+
+PARAMETER temperature 0.0
+PARAMETER stop <|im_end|>
+PARAMETER stop <|endoftext|>
+PARAMETER num_predict 256
+"##;
+
+const MODELFILE_CRITIC: &str = r##"FROM qwen3.5:2b
+
+SYSTEM """You are the Synapses Critic, an architectural rule violation explainer.
+
+Given an architectural rule violation (rule description, severity, source file, and what it imports/calls), explain the violation and suggest a concrete fix.
+
+Output ONLY valid JSON with no other text: {"explanation": "why this is a violation and what risk it creates", "fix": "specific actionable fix the developer should apply"}
+
+Example:
+Input: Rule: no-cross-layer-imports. Severity: error. File: internal/api/handler.go imports internal/store/sqlite.go
+Output: {"explanation": "The API handler directly imports the SQLite store implementation, bypassing the store interface. This creates tight coupling — changing the database requires modifying the API layer.", "fix": "Import the store.Store interface instead of the concrete sqlite implementation. Use dependency injection to pass the store to the handler."}
+
+Be direct and actionable. Reference actual file names and symbols from the input."""
+
+PARAMETER temperature 0.1
+PARAMETER stop <|im_end|>
+PARAMETER stop <|endoftext|>
+PARAMETER num_predict 512
+"##;
+
+const MODELFILE_LIBRARIAN: &str = r##"FROM qwen3.5:2b
+
+SYSTEM """You are the Synapses Librarian, a code architecture analyst.
+
+Given a code graph slice (entity name, type, package, callers, callees, and relationships), analyze it for architectural patterns, risks, and insights.
+
+Output ONLY valid JSON — no explanation, no markdown:
+{"insight":"2-sentence architectural analysis","concerns":["concern1","concern2"]}
+
+Rules:
+- insight: identify the entity's role in the architecture (hub, gateway, utility, etc.) and its most important characteristic
+- concerns: list 0-3 specific risks (cyclic deps, missing error handling, god object, missing abstraction, etc.)
+- If no concerns, return an empty array: "concerns":[]
+- Be specific — reference actual entity names and relationships, not generic advice"""
+
+PARAMETER temperature 0.2
+PARAMETER stop <|im_end|>
+PARAMETER stop <|endoftext|>
+PARAMETER num_predict 512
+"##;
+
+const MODELFILE_NAVIGATOR: &str = r##"FROM qwen3.5:2b
+
+SYSTEM """You are the Synapses Navigator. You resolve multi-agent work scope conflicts.
+
+Input: A JSON description of agents with their active scopes, and the new agent requesting a scope.
+
+Output ONLY valid JSON — no explanation, no markdown:
+{"suggestion":"how to resolve the conflict or confirmation it is safe","alternative_scope":"a suggested non-overlapping scope for the new agent, or empty string if no conflict"}
+
+Rules:
+- If the new agent's scope overlaps with an active agent's scope, describe the conflict and suggest a narrower scope
+- If there is no real conflict (different packages, non-overlapping files), return: {"suggestion":"No conflict. Safe to proceed.","alternative_scope":""}
+- Be specific — reference actual package names and file paths from the input
+- alternative_scope should be a valid Go package path or file glob pattern"""
+
+PARAMETER temperature 0.1
+PARAMETER stop <|im_end|>
+PARAMETER stop <|endoftext|>
+PARAMETER num_predict 512
+"##;
+
+const MODELFILE_ARCHIVIST: &str = r##"FROM qwen3.5:2b
+
+SYSTEM """You are the Synapses Archivist. You synthesize agent session transcripts into persistent memories.
+
+Input: JSON with session_events (tool calls with results) and existing_memory (already saved entries).
+
+Output ONLY valid JSON — no explanation, no markdown:
+{"new_memories":[{"key":"short_snake_case_key","content":"what to remember in one sentence","entities":"EntityName1,EntityName2"}],"annotations":[{"node":"EntityName","note":"specific observation about this entity"}]}
+
+Note: entities is a comma-separated string, NOT an array.
+
+Rules:
+- Only save architectural discoveries, non-obvious relationships, or decisions that will matter in future sessions
+- If the session is trivial (single lookup, no architectural discovery, only routine tool calls), return: {"new_memories":[],"annotations":[]}
+- Never duplicate entries already present in existing_memory — check keys before adding
+- Keep each memory content to one concise sentence
+- Only annotate entities that were meaningfully analyzed, not just mentioned in passing
+- key must be short_snake_case (e.g., "auth_service_is_hub", "graph_new_entry_point")"""
+
+PARAMETER temperature 0.3
+PARAMETER stop <|im_end|>
+PARAMETER stop <|endoftext|>
+PARAMETER num_predict 1024
+"##;
+
+fn modelfile_for_tier(tier: &str) -> Option<&'static str> {
+    match tier {
+        "synapses/sentry"    => Some(MODELFILE_SENTRY),
+        "synapses/critic"    => Some(MODELFILE_CRITIC),
+        "synapses/librarian" => Some(MODELFILE_LIBRARIAN),
+        "synapses/navigator" => Some(MODELFILE_NAVIGATOR),
+        "synapses/archivist" => Some(MODELFILE_ARCHIVIST),
+        _ => None,
+    }
+}
+
+/// Registers a single Synapses AI tier identity via Ollama's HTTP API (POST /api/create).
+/// No subprocess — calls Ollama directly with the embedded Modelfile content.
+/// Zero PATH dependency: requires only Ollama running at ollama_url.
 /// Emits "brain-identity-status" events:
-///   { tier, status: "registering" }  — when starting
-///   { tier, status: "done" }         — on success
-///   { tier, status: "error", message } — on failure
+///   { tier, status: "registering" }           — immediately on call
+///   { tier, status: "done" }                  — on success
+///   { tier, status: "error", message: "..." } — on failure
 #[tauri::command]
-async fn register_brain_identity(tier: String, app: AppHandle) -> Result<(), String> {
-    let bin = find_binary("synapses")
-        .ok_or_else(|| "synapses binary not found in ~/.synapses/bin or PATH".to_string())?;
+async fn register_brain_identity(
+    tier: String,
+    ollama_url: String,
+    app: AppHandle,
+) -> Result<(), String> {
+    let modelfile = modelfile_for_tier(&tier)
+        .ok_or_else(|| format!("Unknown tier '{}' — valid tiers: synapses/sentry, synapses/critic, synapses/librarian, synapses/navigator, synapses/archivist", tier))?;
 
     let _ = app.emit("brain-identity-status", serde_json::json!({
         "tier": tier, "status": "registering"
     }));
 
-    let tier_clone = tier.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        std::process::Command::new(bin)
-            .args(["brain", "register", &tier_clone])
-            .output()
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
 
-    match result {
-        Ok(out) if out.status.success() => {
+    let resp = client
+        .post(format!("{}/api/create", ollama_url.trim_end_matches('/')))
+        .json(&serde_json::json!({
+            "name":      tier,
+            "modelfile": modelfile,
+            "stream":    false,
+        }))
+        .send()
+        .await
+        .map_err(|e| {
+            let msg = format!("Cannot reach Ollama at {}: {}", ollama_url, e);
             let _ = app.emit("brain-identity-status", serde_json::json!({
-                "tier": tier, "status": "done"
+                "tier": tier, "status": "error", "message": &msg
             }));
-            Ok(())
-        }
-        Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-            let msg = if !stderr.trim().is_empty() { stderr } else { stdout };
-            let msg = msg.trim().to_string();
-            let _ = app.emit("brain-identity-status", serde_json::json!({
-                "tier": tier, "status": "error", "message": msg
-            }));
-            Err(format!("{}: {}", tier, msg))
-        }
-        Err(e) => {
-            let _ = app.emit("brain-identity-status", serde_json::json!({
-                "tier": tier, "status": "error", "message": &e
-            }));
-            Err(e)
-        }
+            msg
+        })?;
+
+    if !resp.status().is_success() {
+        let http_status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        let msg = format!("Ollama /api/create returned HTTP {}: {}", http_status, body.trim());
+        let _ = app.emit("brain-identity-status", serde_json::json!({
+            "tier": tier, "status": "error", "message": &msg
+        }));
+        return Err(msg);
     }
+
+    // Parse the response — check for an inline error field even on HTTP 200
+    let body: serde_json::Value = resp.json().await
+        .unwrap_or(serde_json::json!({"status": "success"}));
+
+    if let Some(err) = body["error"].as_str() {
+        let msg = err.to_string();
+        let _ = app.emit("brain-identity-status", serde_json::json!({
+            "tier": tier, "status": "error", "message": &msg
+        }));
+        return Err(format!("{}: {}", tier, msg));
+    }
+
+    let _ = app.emit("brain-identity-status", serde_json::json!({
+        "tier": tier, "status": "done"
+    }));
+    Ok(())
 }
 
 // ── Tauri commands — app state ────────────────────────────────────────────────
