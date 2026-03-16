@@ -868,16 +868,32 @@ fn register_launch_agent() -> Result<(), String> {
 // ── Ollama detection ──────────────────────────────────────────────────────────
 
 /// Checks if Ollama is reachable and returns its version + installed model names.
-/// Ollama runs on its default port 11434; synapses daemon is on 11435.
+/// Accepts an optional URL; if omitted, reads ollama_url from ~/.synapses/brain.json,
+/// falling back to http://localhost:11434. This means custom-URL users get accurate
+/// status instead of always appearing offline.
 #[tauri::command]
-async fn check_ollama() -> Result<serde_json::Value, String> {
+async fn check_ollama(url: Option<String>) -> Result<serde_json::Value, String> {
+    let base = url.unwrap_or_else(|| {
+        // Read configured URL from brain.json so custom-URL users get the right status.
+        let path = sidecar::synapses_data_dir().join("brain.json");
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(u) = v["ollama_url"].as_str().filter(|s| !s.is_empty()) {
+                    return u.to_string();
+                }
+            }
+        }
+        "http://localhost:11434".to_string()
+    });
+    let base = base.trim_end_matches('/').to_string();
+
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
         .build()
         .unwrap_or_default();
 
     // Check version
-    let version_res = client.get("http://localhost:11434/api/version").send().await;
+    let version_res = client.get(format!("{}/api/version", base)).send().await;
     let version = match version_res {
         Ok(r) if r.status().is_success() => {
             r.json::<serde_json::Value>().await
@@ -889,7 +905,7 @@ async fn check_ollama() -> Result<serde_json::Value, String> {
     };
 
     // List installed models
-    let models: Vec<String> = match client.get("http://localhost:11434/api/tags").send().await {
+    let models: Vec<String> = match client.get(format!("{}/api/tags", base)).send().await {
         Ok(r) => match r.json::<serde_json::Value>().await {
             Ok(v) => v["models"].as_array()
                 .map(|arr| arr.iter()

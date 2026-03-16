@@ -165,7 +165,8 @@ interface BrainConfig {
   TimeoutMS: number;
   DefaultPhase: string; DefaultMode: string;
   Ingest: boolean; Enrich: boolean; Guardian: boolean; Orchestrate: boolean; Memorize: boolean;
-  [key: string]: string | number | boolean;
+  enabled?: boolean;
+  [key: string]: string | number | boolean | undefined;
 }
 
 interface InstalledModel { name: string; size: number; modified_at: string; }
@@ -335,6 +336,10 @@ export function Models() {
   const recLevel        = ramGb > 0 ? recommendedLevel(ramGb) : "standard";
   const budgetGb        = ramGb > 0 ? parseFloat((ramGb * 0.18).toFixed(1)) : null;
 
+  // Brain enabled state: treat as enabled unless explicitly set to false.
+  // This means old brain.json files without the "enabled" key default to enabled.
+  const brainEnabled = brainConfig.enabled !== false;
+
   // Brain setup derived state
   const normName = (n: string) => n.replace(/:latest$/, "");
   const baseModelInstalled  = installedNames.some((n) => normName(n) === "qwen3.5:2b");
@@ -426,7 +431,29 @@ export function Models() {
   }
 
   async function writeBrainConfig(cfg: BrainConfig) {
-    await invoke("write_brain_config", { content: JSON.stringify(cfg) });
+    // Always write both PascalCase (TypeScript reads) and snake_case (Go daemon reads).
+    // If PascalCase fields are empty (brain.json was written by Go daemon/CLI, snake_case only),
+    // fall back to the snake_case values so we don't wipe existing config.
+    const sc = cfg as Record<string, unknown>;
+    const ollamaUrl   = cfg.OllamaURL        || sc["ollama_url"]        as string || OLLAMA_URL_DEFAULT;
+    const ingest      = cfg.ModelIngest      || sc["model_ingest"]      as string || "";
+    const guardian    = cfg.ModelGuardian    || sc["model_guardian"]    as string || "";
+    const enrich      = cfg.ModelEnrich      || sc["model_enrich"]      as string || "";
+    const orchestrate = cfg.ModelOrchestrate || sc["model_orchestrate"] as string || "";
+    const archivist   = cfg.ModelArchivist   || sc["model_archivist"]   as string || "";
+    const level       = detectLevel(cfg);
+    const toWrite = {
+      ...cfg,
+      backend:           "ollama",
+      OllamaURL:         ollamaUrl,   ollama_url:        ollamaUrl,
+      ModelIngest:       ingest,      model_ingest:      ingest,
+      ModelGuardian:     guardian,    model_guardian:    guardian,
+      ModelEnrich:       enrich,      model_enrich:      enrich,
+      ModelOrchestrate:  orchestrate, model_orchestrate: orchestrate,
+      ModelArchivist:    archivist,   model_archivist:   archivist,
+      ...(level !== "custom" && { intelligence_mode: level }),
+    };
+    await invoke("write_brain_config", { content: JSON.stringify(toWrite) });
   }
 
   // ── Intelligence level ─────────────────────────────────────────────────────
@@ -489,6 +516,14 @@ export function Models() {
       setOllamaApplied(true);
       addToast("success", "Settings saved. Restart Ollama for max-models to take effect.", 6000);
       setTimeout(() => setOllamaApplied(false), 3000);
+      // Re-check Ollama with the new URL so the status indicator reflects the change.
+      // Pass the URL explicitly — check_ollama reads brain.json but the file write may
+      // not have flushed yet by the time the Rust call runs.
+      const newStatus = await invoke<{ running: boolean; version?: string }>(
+        "check_ollama", { url: ollamaUrl }
+      ).catch(() => ({ running: false, version: undefined }));
+      setOllamaStatus({ running: newStatus.running, version: newStatus.version });
+      if (newStatus.running) await refreshModels(ollamaUrl);
     } catch (e) { addToast("error", `Failed: ${e}`); }
   }
 
@@ -501,12 +536,27 @@ export function Models() {
     return missingIds.some((id) => id.tag === tag);
   }
 
+  async function toggleBrainEnabled() {
+    const updated = { ...brainConfig, enabled: !brainEnabled };
+    setBrainConfig(updated); // optimistic
+    try {
+      await writeBrainConfig(updated);
+      invoke("restart_service", { name: "synapses" }).catch(() => {});
+      addToast("success", `Brain ${updated.enabled ? "enabled" : "disabled"}. Daemon restarting.`);
+    } catch (e) {
+      setBrainConfig(brainConfig); // rollback on failure
+      addToast("error", `Failed to save: ${e}`);
+    }
+  }
+
   async function retryTier(tag: string) {
+    setSetupRunning(true); // prevent concurrent retries via the Retry button
     setTierErrors((prev) => { const n = { ...prev }; delete n[tag]; return n; });
     try {
       await invoke<void>("register_brain_identity", { tier: tag, ollamaUrl: activeOllamaUrl });
       await refreshModels();
     } catch { /* tierStatus + tierErrors updated via event listener */ }
+    setSetupRunning(false);
   }
 
   async function setupBrain() {
@@ -541,32 +591,16 @@ export function Models() {
 
     if (failed === 0) {
       const level = currentLevel !== "custom" ? currentLevel : recLevel;
-      const updated: BrainConfig = { ...brainConfig, ...INTELLIGENCE_LEVELS[level].config };
-
-      // Bug 5 fix: write BOTH PascalCase (frontend reads) and snake_case (Go daemon reads).
-      // BrainConfig JSON tags in Go are snake_case; TypeScript uses PascalCase.
-      // Without both, the daemon ignores the model assignments and stays on defaults.
-      const toWrite = {
-        ...updated,
-        enabled: true,
-        backend: "ollama",
-        ollama_url:        updated.OllamaURL      || OLLAMA_URL_DEFAULT,
-        intelligence_mode: level,
-        model_ingest:      updated.ModelIngest,
-        model_guardian:    updated.ModelGuardian,
-        model_enrich:      updated.ModelEnrich,
-        model_orchestrate: updated.ModelOrchestrate,
-        model_archivist:   updated.ModelArchivist,
-      };
+      const updated: BrainConfig = { ...brainConfig, ...INTELLIGENCE_LEVELS[level].config, enabled: true };
 
       try {
-        await invoke("write_brain_config", { content: JSON.stringify(toWrite) });
-        setBrainConfig({ ...updated, enabled: true } as BrainConfig);
+        // writeBrainConfig writes both PascalCase + snake_case, backend, intelligence_mode
+        await writeBrainConfig(updated);
+        setBrainConfig(updated);
 
-        // Bug 2 fix: daemon reads brain.json only at startup — restart it so the
-        // brain actually activates. Fire-and-forget; failure is non-fatal.
+        // Daemon reads brain.json only at startup — restart so brain actually activates.
         invoke("restart_service", { name: "synapses" }).catch(() => {});
-        addToast("success", `Brain enabled. Daemon restarting to apply — takes ~3s.`);
+        addToast("success", "Brain enabled. Daemon restarting to apply — takes ~3s.");
       } catch {
         addToast("success", `${toRegister.length} tier${toRegister.length > 1 ? "s" : ""} registered. Restart Synapses to activate the brain.`);
       }
@@ -742,9 +776,19 @@ export function Models() {
             </p>
           </div>
           {brainReady && (
-            <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--success)", flexShrink: 0, paddingTop: 2 }}>
-              <CheckCircle size={14} /> Brain Ready
-            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--success)" }}>
+                <CheckCircle size={14} /> Brain Ready
+              </span>
+              <button
+                className={brainEnabled ? "btn-primary" : "btn-secondary"}
+                style={{ fontSize: 11, padding: "4px 12px" }}
+                onClick={toggleBrainEnabled}
+                title={brainEnabled ? "Click to disable the brain" : "Click to enable the brain"}
+              >
+                <Power size={11} /> {brainEnabled ? "Enabled" : "Disabled"}
+              </button>
+            </div>
           )}
         </div>
 
@@ -889,9 +933,11 @@ export function Models() {
                   );
                 }
                 if (toRegister.length === 0) return null;
+                // Match the same reachability check used in setupBrain()
+                const btnOllamaReachable = ollamaStatus?.running || activeOllamaUrl !== OLLAMA_URL_DEFAULT;
                 return (
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    {ollamaStatus?.running ? (
+                    {btnOllamaReachable ? (
                       <button
                         className="btn-primary"
                         style={{ fontSize: 12, padding: "7px 16px", alignSelf: "flex-start" }}
