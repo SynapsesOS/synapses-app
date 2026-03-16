@@ -510,35 +510,66 @@ export function Models() {
   }
 
   async function setupBrain() {
-    if (!ollamaStatus?.running) return;
+    // Bug 3 fix: gate on reachability of the *configured* URL, not the hardcoded
+    // localhost check from check_ollama (which always pings 11434 regardless of settings).
+    const ollamaReachable = ollamaStatus?.running || activeOllamaUrl !== OLLAMA_URL_DEFAULT;
+    if (!ollamaReachable) return;
+
     const toRegister = BRAIN_IDENTITIES.filter((id) => tierNeedsRegister(id.tag));
     if (toRegister.length === 0) return;
 
     setSetupRunning(true);
-    // Clear previous errors for tiers we're about to register
     setTierErrors((prev) => {
       const next = { ...prev };
       for (const id of toRegister) delete next[id.tag];
       return next;
     });
 
-    // Register all in parallel — /api/create is fast (~200ms, just writes a manifest)
-    const results = await Promise.allSettled(
-      toRegister.map((id) => invoke<void>("register_brain_identity", { tier: id.tag, ollamaUrl: activeOllamaUrl }))
-    );
-
-    const failed = results.filter((r) => r.status === "rejected").length;
+    // Bug 1 fix: sequential, not parallel.
+    // Ollama's /api/create acquires per-manifest file locks. Concurrent creates for
+    // identities that all reference the same base model blobs can race on the shared
+    // blob record and return a 500 or EOF on slower machines.
+    let failed = 0;
+    for (const id of toRegister) {
+      try {
+        await invoke<void>("register_brain_identity", { tier: id.tag, ollamaUrl: activeOllamaUrl });
+      } catch {
+        failed++;
+        // tierStatus + tierErrors already updated via the brain-identity-status event listener
+      }
+    }
 
     if (failed === 0) {
-      // Enable brain in config with the selected intelligence level
       const level = currentLevel !== "custom" ? currentLevel : recLevel;
       const updated: BrainConfig = { ...brainConfig, ...INTELLIGENCE_LEVELS[level].config };
-      (updated as Record<string, unknown>)["enabled"] = true;
+
+      // Bug 5 fix: write BOTH PascalCase (frontend reads) and snake_case (Go daemon reads).
+      // BrainConfig JSON tags in Go are snake_case; TypeScript uses PascalCase.
+      // Without both, the daemon ignores the model assignments and stays on defaults.
+      const toWrite = {
+        ...updated,
+        enabled: true,
+        backend: "ollama",
+        ollama_url:        updated.OllamaURL      || OLLAMA_URL_DEFAULT,
+        intelligence_mode: level,
+        model_ingest:      updated.ModelIngest,
+        model_guardian:    updated.ModelGuardian,
+        model_enrich:      updated.ModelEnrich,
+        model_orchestrate: updated.ModelOrchestrate,
+        model_archivist:   updated.ModelArchivist,
+      };
+
       try {
-        await writeBrainConfig(updated);
-        setBrainConfig(updated);
-      } catch { /* best-effort — brain.json write failure is non-fatal */ }
-      addToast("success", `${toRegister.length} AI tier identit${toRegister.length === 1 ? "y" : "ies"} registered. Brain enabled.`);
+        await invoke("write_brain_config", { content: JSON.stringify(toWrite) });
+        setBrainConfig({ ...updated, enabled: true } as BrainConfig);
+
+        // Bug 2 fix: daemon reads brain.json only at startup — restart it so the
+        // brain actually activates. Fire-and-forget; failure is non-fatal.
+        invoke("restart_service", { name: "synapses" }).catch(() => {});
+        addToast("success", `Brain enabled. Daemon restarting to apply — takes ~3s.`);
+      } catch {
+        addToast("success", `${toRegister.length} tier${toRegister.length > 1 ? "s" : ""} registered. Restart Synapses to activate the brain.`);
+      }
     } else {
       addToast("error", `${failed} tier${failed > 1 ? "s" : ""} failed — see errors on the rows above.`);
     }
