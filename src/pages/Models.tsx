@@ -182,9 +182,9 @@ type PullProgress = { completed?: number; total?: number; status?: string };
 const DEFAULT_CONFIG: BrainConfig = {
   OllamaURL: OLLAMA_URL_DEFAULT,
   ModelIngest: "", ModelGuardian: "", ModelEnrich: "", ModelOrchestrate: "", ModelArchivist: "",
-  TimeoutMS: 30000,
+  TimeoutMS: 60000, // matches Go DefaultConfig — qwen3.5:2b on CPU can take 25–45 s
   DefaultPhase: "development", DefaultMode: "standard",
-  Ingest: true, Enrich: false, Guardian: false, Orchestrate: false, Memorize: false,
+  Ingest: true, Enrich: true, Guardian: true, Orchestrate: true, Memorize: true,
 };
 
 function fmtBytes(b: number): string {
@@ -302,7 +302,7 @@ export function Models() {
 
   // Ollama settings
   const [ollamaUrl, setOllamaUrl]         = useState(OLLAMA_URL_DEFAULT);
-  const [timeoutMs, setTimeoutMs]         = useState(30000);
+  const [timeoutMs, setTimeoutMs]         = useState(60000);
   const [ollamaApplied, setOllamaApplied] = useState(false);
 
   // Pull state
@@ -382,7 +382,7 @@ export function Models() {
 
       setBrainConfig(cfg);
       setOllamaUrl(cfg.OllamaURL || OLLAMA_URL_DEFAULT);
-      setTimeoutMs(cfg.TimeoutMS || 30000);
+      setTimeoutMs(cfg.TimeoutMS || 60000);
 
       if (status.status === "fulfilled" && status.value.running)
         await refreshModels(cfg.OllamaURL || OLLAMA_URL_DEFAULT);
