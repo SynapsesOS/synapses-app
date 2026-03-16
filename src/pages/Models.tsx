@@ -132,9 +132,11 @@ const QUALITY_MODES = [
 // ── Level helpers ─────────────────────────────────────────────────────────────
 
 function recommendedLevel(ramGb: number): IntelligenceLevel {
+  // Go config.go: ModeOptimal targets 8 GB systems, ModeStandard targets 16 GB+.
+  // 8 GB machines should run Optimal — Critic off keeps the 2.7 GB model from
+  // crowding out the OS and user apps.
   if (ramGb >= 16) return "standard";
-  if (ramGb >= 8)  return "standard";
-  return "optimal"; // 8 GB or less — Critic off saves CPU cycles
+  return "optimal";
 }
 
 function detectLevel(cfg: BrainConfig): IntelligenceLevel | "custom" {
@@ -431,26 +433,42 @@ export function Models() {
   }
 
   async function writeBrainConfig(cfg: BrainConfig) {
-    // Always write both PascalCase (TypeScript reads) and snake_case (Go daemon reads).
-    // If PascalCase fields are empty (brain.json was written by Go daemon/CLI, snake_case only),
-    // fall back to the snake_case values so we don't wipe existing config.
-    const sc = cfg as Record<string, unknown>;
+    // Always write BOTH PascalCase (TypeScript reads) AND snake_case (Go daemon reads).
+    //
+    // Go BrainConfig struct tags are all snake_case. TypeScript BrainConfig uses PascalCase.
+    // Without both forms in brain.json, the daemon silently ignores the PascalCase keys and
+    // uses its own defaults — meaning Brain Behavior settings never reach the binary.
+    //
+    // Model variable names prefixed mdl_ to avoid collision with boolean feature-flag keys
+    // (ingest/enrich/guardian/orchestrate are BOTH model strings AND boolean flags in Go).
+    const sc          = cfg as Record<string, unknown>;
     const ollamaUrl   = cfg.OllamaURL        || sc["ollama_url"]        as string || OLLAMA_URL_DEFAULT;
-    const ingest      = cfg.ModelIngest      || sc["model_ingest"]      as string || "";
-    const guardian    = cfg.ModelGuardian    || sc["model_guardian"]    as string || "";
-    const enrich      = cfg.ModelEnrich      || sc["model_enrich"]      as string || "";
-    const orchestrate = cfg.ModelOrchestrate || sc["model_orchestrate"] as string || "";
-    const archivist   = cfg.ModelArchivist   || sc["model_archivist"]   as string || "";
+    const mdlIngest   = cfg.ModelIngest      || sc["model_ingest"]      as string || "";
+    const mdlGuardian = cfg.ModelGuardian    || sc["model_guardian"]    as string || "";
+    const mdlEnrich   = cfg.ModelEnrich      || sc["model_enrich"]      as string || "";
+    const mdlOrch     = cfg.ModelOrchestrate || sc["model_orchestrate"] as string || "";
+    const mdlArchivst = cfg.ModelArchivist   || sc["model_archivist"]   as string || "";
     const level       = detectLevel(cfg);
     const toWrite = {
       ...cfg,
       backend:           "ollama",
-      OllamaURL:         ollamaUrl,   ollama_url:        ollamaUrl,
-      ModelIngest:       ingest,      model_ingest:      ingest,
-      ModelGuardian:     guardian,    model_guardian:    guardian,
-      ModelEnrich:       enrich,      model_enrich:      enrich,
-      ModelOrchestrate:  orchestrate, model_orchestrate: orchestrate,
-      ModelArchivist:    archivist,   model_archivist:   archivist,
+      // Model identity fields
+      OllamaURL:         ollamaUrl,    ollama_url:        ollamaUrl,
+      ModelIngest:       mdlIngest,    model_ingest:      mdlIngest,
+      ModelGuardian:     mdlGuardian,  model_guardian:    mdlGuardian,
+      ModelEnrich:       mdlEnrich,    model_enrich:      mdlEnrich,
+      ModelOrchestrate:  mdlOrch,      model_orchestrate: mdlOrch,
+      ModelArchivist:    mdlArchivst,  model_archivist:   mdlArchivst,
+      // Behavioral fields — Go reads snake_case only; TypeScript spreads PascalCase.
+      // Without these, setPhase / setMode / timeout changes never reach the daemon.
+      timeout_ms:    cfg.TimeoutMS,
+      default_phase: cfg.DefaultPhase,
+      default_mode:  cfg.DefaultMode,
+      ingest:        cfg.Ingest,
+      enrich:        cfg.Enrich,
+      guardian:      cfg.Guardian,
+      orchestrate:   cfg.Orchestrate,
+      memorize:      cfg.Memorize,
       ...(level !== "custom" && { intelligence_mode: level }),
     };
     await invoke("write_brain_config", { content: JSON.stringify(toWrite) });
@@ -854,73 +872,84 @@ export function Models() {
                 Think of them as "roles" for the same actor.
               </p>
 
-              {/* Identity rows — hide until Ollama status is known to prevent "○ missing" flash */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
-                {ollamaStatus === null ? (
-                  <div style={{ fontSize: 11, color: "var(--text-dim)", padding: "6px 2px" }}>
-                    Checking Ollama...
-                  </div>
-                ) : BRAIN_IDENTITIES.map((id) => {
-                  const registered   = installedNames.some((n) => normName(n) === id.tag);
-                  const tStatus      = tierStatus[id.tag];
-                  const tError       = tierErrors[id.tag];
-                  const isRegistering = tStatus === "registering";
-                  const isError       = tStatus === "error";
-                  const isDone        = tStatus === "done" || registered;
+              {/* Identity status — compact summary when all configured, per-row detail only when actionable */}
+              {(() => {
+                const anyError     = Object.keys(tierErrors).length > 0;
+                const allDone      = ollamaStatus !== null && missingIds.length === 0 && !setupRunning && !anyError;
 
+                if (allDone) {
+                  // All 5 registered, nothing to do — show one clean summary line
                   return (
-                    <div key={id.tag} style={{
-                      display: "flex", alignItems: "flex-start", gap: 10,
-                      padding: "8px 10px", borderRadius: "var(--radius-sm)",
-                      background: isError ? "rgba(239,68,68,0.05)" : isDone ? "rgba(34,197,94,0.05)" : "var(--surface)",
-                      border: `1px solid ${isError ? "rgba(239,68,68,0.2)" : isDone ? "rgba(34,197,94,0.2)" : "var(--border)"}`,
-                      transition: "background 0.2s, border-color 0.2s",
-                    }}>
-                      <span style={{
-                        fontSize: 11, marginTop: 1, flexShrink: 0, lineHeight: 1,
-                        color: isError ? "var(--danger)" : isDone ? "var(--success)" : isRegistering ? "var(--accent)" : "var(--text-dim)",
-                        display: "flex", alignItems: "center",
-                      }}>
-                        {isRegistering
-                          ? <RefreshCw size={11} className="spin" />
-                          : isDone ? "✓" : isError ? "✗" : "○"}
-                      </span>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
-                          <code style={{ fontSize: 11, color: "var(--accent)" }}>{id.tag}</code>
-                          <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 3,
-                            background: "var(--surface2)", color: "var(--text-dim)", border: "1px solid var(--border)" }}>
-                            {id.tier}
-                          </span>
-                          {isRegistering && (
-                            <span style={{ fontSize: 10, color: "var(--accent)", fontStyle: "italic" }}>
-                              registering...
-                            </span>
-                          )}
-                        </div>
-                        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{id.role}</div>
-                        {isError && tError ? (
-                          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
-                            <span style={{ fontSize: 10, color: "var(--danger)", flex: 1, lineHeight: 1.4 }}>
-                              {tError.length > 140 ? tError.slice(0, 140) + "…" : tError}
-                            </span>
-                            <button
-                              className="btn-ghost"
-                              style={{ fontSize: 10, padding: "2px 8px", flexShrink: 0 }}
-                              onClick={() => retryTier(id.tag)}
-                              disabled={setupRunning}
-                            >
-                              Retry
-                            </button>
-                          </div>
-                        ) : (
-                          <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, fontStyle: "italic" }}>{id.note}</div>
-                        )}
-                      </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11,
+                      color: "var(--success)", padding: "6px 2px", marginBottom: 12 }}>
+                      <CheckCircle size={12} />
+                      {BRAIN_IDENTITIES.length}/{BRAIN_IDENTITIES.length} identities configured — all tiers ready
                     </div>
                   );
-                })}
-              </div>
+                }
+
+                // Show per-row list: during setup, on errors, or when some identities are missing
+                return (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+                    {ollamaStatus === null ? (
+                      <div style={{ fontSize: 11, color: "var(--text-dim)", padding: "6px 2px" }}>
+                        Checking Ollama...
+                      </div>
+                    ) : BRAIN_IDENTITIES.map((id) => {
+                      const registered    = installedNames.some((n) => normName(n) === id.tag);
+                      const tStatus       = tierStatus[id.tag];
+                      const tError        = tierErrors[id.tag];
+                      const isRegistering = tStatus === "registering";
+                      const isError       = tStatus === "error";
+                      const isDone        = tStatus === "done" || registered;
+
+                      return (
+                        <div key={id.tag} style={{
+                          display: "flex", alignItems: "flex-start", gap: 10,
+                          padding: "8px 10px", borderRadius: "var(--radius-sm)",
+                          background: isError ? "rgba(239,68,68,0.05)" : isDone ? "rgba(34,197,94,0.05)" : "var(--surface)",
+                          border: `1px solid ${isError ? "rgba(239,68,68,0.2)" : isDone ? "rgba(34,197,94,0.2)" : "var(--border)"}`,
+                          transition: "background 0.2s, border-color 0.2s",
+                        }}>
+                          <span style={{
+                            fontSize: 11, marginTop: 1, flexShrink: 0, lineHeight: 1,
+                            color: isError ? "var(--danger)" : isDone ? "var(--success)" : isRegistering ? "var(--accent)" : "var(--text-dim)",
+                            display: "flex", alignItems: "center",
+                          }}>
+                            {isRegistering ? <RefreshCw size={11} className="spin" /> : isDone ? "✓" : isError ? "✗" : "○"}
+                          </span>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
+                              <code style={{ fontSize: 11, color: "var(--accent)" }}>{id.tag}</code>
+                              <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 3,
+                                background: "var(--surface2)", color: "var(--text-dim)", border: "1px solid var(--border)" }}>
+                                {id.tier}
+                              </span>
+                              {isRegistering && (
+                                <span style={{ fontSize: 10, color: "var(--accent)", fontStyle: "italic" }}>registering...</span>
+                              )}
+                            </div>
+                            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{id.role}</div>
+                            {isError && tError ? (
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+                                <span style={{ fontSize: 10, color: "var(--danger)", flex: 1, lineHeight: 1.4 }}>
+                                  {tError.length > 140 ? tError.slice(0, 140) + "…" : tError}
+                                </span>
+                                <button className="btn-ghost" style={{ fontSize: 10, padding: "2px 8px", flexShrink: 0 }}
+                                  onClick={() => retryTier(id.tag)} disabled={setupRunning}>
+                                  Retry
+                                </button>
+                              </div>
+                            ) : (
+                              <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, fontStyle: "italic" }}>{id.note}</div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
 
               {/* Register button — gated on base model installed + ollama running */}
               {(() => {
@@ -989,10 +1018,13 @@ export function Models() {
           )}
         </div>
 
-        {/* Level cards */}
+        {/* Level cards — "full" is identical to "standard" so we hide it.
+            If a user already has full set (brain.json), Standard card appears selected. */}
         <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
-          {(Object.entries(INTELLIGENCE_LEVELS) as [IntelligenceLevel, typeof INTELLIGENCE_LEVELS[IntelligenceLevel]][]).map(([key, level]) => {
-            const isSelected    = currentLevel === key;
+          {(Object.entries(INTELLIGENCE_LEVELS) as [IntelligenceLevel, typeof INTELLIGENCE_LEVELS[IntelligenceLevel]][])
+            .filter(([key]) => key !== "full")
+            .map(([key, level]) => {
+            const isSelected    = currentLevel === key || (key === "standard" && currentLevel === "full");
             const isRecommended = key === recLevel;
             return (
               <div
@@ -1076,21 +1108,21 @@ export function Models() {
         )}
 
         {/* Download / ready status for selected level */}
-        {currentLevel !== "custom" && (
-          <>
-            {!brainReady ? (
-              <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text-muted)" }}>
-                <Info size={13} style={{ color: "var(--accent)" }} />
-                Complete Brain Setup above to activate the {INTELLIGENCE_LEVELS[currentLevel].label} level.
-              </div>
-            ) : (
-              <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--success)" }}>
-                <CheckCircle size={14} />
-                {INTELLIGENCE_LEVELS[currentLevel].label} level is active.
-              </div>
-            )}
-          </>
-        )}
+        {currentLevel !== "custom" && (() => {
+          // "full" is identical to "standard" — display as Standard
+          const displayLevel = (currentLevel === "full" ? "standard" : currentLevel) as IntelligenceLevel;
+          return !brainReady ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text-muted)" }}>
+              <Info size={13} style={{ color: "var(--accent)" }} />
+              Complete Brain Setup above to activate the {INTELLIGENCE_LEVELS[displayLevel].label} level.
+            </div>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--success)" }}>
+              <CheckCircle size={14} />
+              {INTELLIGENCE_LEVELS[displayLevel].label} level is active.
+            </div>
+          );
+        })()}
       </section>
 
       {/* ════════════════════════════════════════════════════════════════════
