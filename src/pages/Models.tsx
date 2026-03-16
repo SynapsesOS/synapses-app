@@ -303,7 +303,6 @@ export function Models() {
   // Ollama settings
   const [ollamaUrl, setOllamaUrl]         = useState(OLLAMA_URL_DEFAULT);
   const [timeoutMs, setTimeoutMs]         = useState(30000);
-  const [maxModels, setMaxModels]         = useState(1);
   const [ollamaApplied, setOllamaApplied] = useState(false);
 
   // Pull state
@@ -384,7 +383,6 @@ export function Models() {
       setBrainConfig(cfg);
       setOllamaUrl(cfg.OllamaURL || OLLAMA_URL_DEFAULT);
       setTimeoutMs(cfg.TimeoutMS || 30000);
-      if (gb > 0) setMaxModels(gb >= 16 ? 2 : 1);
 
       if (status.status === "fulfilled" && status.value.running)
         await refreshModels(cfg.OllamaURL || OLLAMA_URL_DEFAULT);
@@ -529,10 +527,10 @@ export function Models() {
   async function applyOllamaSettings() {
     try {
       const updated = { ...brainConfig, OllamaURL: ollamaUrl, TimeoutMS: timeoutMs };
-      await Promise.all([writeBrainConfig(updated), invoke("set_ollama_max_models", { count: maxModels })]);
+      await writeBrainConfig(updated);
       setBrainConfig(updated);
       setOllamaApplied(true);
-      addToast("success", "Settings saved. Restart Ollama for max-models to take effect.", 6000);
+      addToast("success", "Settings saved.");
       setTimeout(() => setOllamaApplied(false), 3000);
       // Re-check Ollama with the new URL so the status indicator reflects the change.
       // Pass the URL explicitly — check_ollama reads brain.json but the file write may
@@ -1144,35 +1142,14 @@ export function Models() {
               onChange={(e) => setOllamaUrl(e.target.value)} placeholder="http://localhost:11434" />
           </div>
 
-          <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-            <div style={{ flex: 1, minWidth: 200 }}>
-              <label className="field-label">
-                Concurrent Models in Memory
-                <code style={{ fontSize: 9, letterSpacing: 0, textTransform: "none", marginLeft: 6, color: "var(--text-dim)" }}>OLLAMA_MAX_LOADED_MODELS</code>
-              </label>
-              <select className="select-input" style={{ width: "100%" }} value={maxModels}
-                onChange={(e) => setMaxModels(Number(e.target.value))}>
-                <option value={1}>1 — swap on demand  (~1.9 GB peak)</option>
-                <option value={2}>2 — two models ready (~3.9 GB peak)</option>
-                <option value={3}>3 — three models     (~5.8 GB peak)</option>
-                <option value={4}>4 — keep all loaded  (~7.8 GB peak)</option>
-              </select>
-              <p className="settings-hint">
-                Lower = less RAM. Higher = fewer model-swap delays (3–8 s each).
-                {ramGb >= 16 ? " For Full level, 2 is optimal." : " For Minimal/Standard, 1 is sufficient."}
-                {" "}Needs an Ollama restart to take effect.
-              </p>
+          <div>
+            <label className="field-label">Request Timeout</label>
+            <div className="pull-row">
+              <input className="text-input" type="number" min={1000} max={300000} step={1000}
+                value={timeoutMs} onChange={(e) => setTimeoutMs(Number(e.target.value))} style={{ width: 110 }} />
+              <span style={{ fontSize: 12, color: "var(--text-muted)" }}>ms</span>
             </div>
-
-            <div style={{ minWidth: 150 }}>
-              <label className="field-label">Request Timeout</label>
-              <div className="pull-row">
-                <input className="text-input" type="number" min={1000} max={300000} step={1000}
-                  value={timeoutMs} onChange={(e) => setTimeoutMs(Number(e.target.value))} style={{ width: 110 }} />
-                <span style={{ fontSize: 12, color: "var(--text-muted)" }}>ms</span>
-              </div>
-              <p className="settings-hint">Per-LLM-request timeout. Default: 30 000 ms.</p>
-            </div>
+            <p className="settings-hint">Per-LLM-request timeout. Default: 30 000 ms.</p>
           </div>
 
           <div>
