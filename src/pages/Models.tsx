@@ -128,6 +128,14 @@ const QUALITY_MODES = [
   { key: "enterprise", label: "Enterprise", desc: "Gate: full tests + integration tests, all exports documented, PR review sign-off, CHANGELOG updated." },
 ];
 
+// ── Utility helpers ───────────────────────────────────────────────────────────
+
+// Strip ANSI escape codes so CLI output is readable in a browser <pre>.
+function stripAnsi(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
 // ── Level helpers ─────────────────────────────────────────────────────────────
 
 function recommendedLevel(ramGb: number): IntelligenceLevel {
@@ -478,19 +486,21 @@ export function Models() {
     setSetupRunning(true);
     setSetupOutput("");
     try {
-      // --skip-pull: base model must already be downloaded before calling this.
-      // The UI ensures qwen3.5:2b is pulled first via the existing pull mechanism.
+      // --skip-pull:  base model must already be downloaded before calling this.
+      //               The UI ensures qwen3.5:2b is pulled first.
+      // --skip-smoke: smoke tests block the Tauri main thread up to 225 s (5 tiers × 45 s).
+      //               The UI verifies registration independently via /api/tags after this call.
+      // --no-color:   ANSI escape codes appear as garbage in a browser <pre>.
       const out = await invoke<string>("run_synapses_cmd", {
-        args: ["brain", "setup", "--skip-pull",
+        args: ["brain", "setup", "--skip-pull", "--skip-smoke", "--no-color",
                "--ollama", activeOllamaUrl,
                "--mode", currentLevel !== "custom" ? currentLevel : "standard"],
       });
-      setSetupOutput(out);
+      setSetupOutput(stripAnsi(out));
       addToast("success", "AI tier identities registered successfully.");
       await refreshModels();
     } catch (e) {
-      const msg = String(e);
-      setSetupOutput(msg);
+      setSetupOutput(stripAnsi(String(e)));
       addToast("error", "Brain setup failed — see output below.");
     } finally {
       setSetupRunning(false);
@@ -729,9 +739,13 @@ export function Models() {
                 Think of them as "roles" for the same actor.
               </p>
 
-              {/* Identity rows */}
+              {/* Identity rows — hide until Ollama status is known to prevent "○ missing" flash */}
               <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
-                {BRAIN_IDENTITIES.map((id) => {
+                {ollamaStatus === null ? (
+                  <div style={{ fontSize: 11, color: "var(--text-dim)", padding: "6px 2px" }}>
+                    Checking Ollama...
+                  </div>
+                ) : BRAIN_IDENTITIES.map((id) => {
                   const registered = installedNames.some((n) => normName(n) === id.tag);
                   return (
                     <div key={id.tag} style={{
