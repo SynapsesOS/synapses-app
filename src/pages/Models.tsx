@@ -11,6 +11,8 @@ import {
   Send,
   Power,
   Info,
+  Layers,
+  Zap,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useToast } from "../context/ToastContext";
@@ -19,53 +21,98 @@ import { useToast } from "../context/ToastContext";
 
 const OLLAMA_URL_DEFAULT = "http://localhost:11434";
 
-// Intelligence level definitions — each maps to a set of tier model assignments.
-// T0/T1 = fast lane (qwen2.5-coder:1.5b), T2/T3/T4 = quality lane (qwen2.5-coder:3b).
-// Navigator and Archivist fine-tuned models are not yet production-ready.
+// All three intelligence levels use the SAME base model: qwen3.5:2b (Q8, ~2.7 GB).
+// The difference is which Ollama "personas" (synapses/* identities) are active —
+// not how much you download. Each persona is a ~1 KB Modelfile config, not a
+// separate model. Ollama shares weights in RAM — all 5 tiers cost ~2.7 GB total.
+//
+// Optimal  — 4 tiers, Critic disabled (Librarian covers Guardian's role)
+// Standard — all 5 tiers, Critic active. Recommended for most machines.
+// Full     — identical to Standard (Full=Standard since the architecture pivot)
 const INTELLIGENCE_LEVELS = {
-  minimal: {
-    label:         "Minimal",
-    tagline:       "Fast AST indexing only",
-    description:   "Keeps the code graph in sync on every save. Lightest possible footprint — Synapses stays completely invisible in the background.",
-    activeTiers:   ["T0 · Reflex"],
-    models:        ["qwen2.5-coder:1.5b"] as string[],
-    downloadLabel: "~986 MB",
+  optimal: {
+    label:         "Optimal",
+    tagline:       "4 tiers, Critic off",
+    description:   "All tiers except Critic are active. Librarian covers rule-violation explanations. Best for machines with 8 GB RAM — same 2.7 GB download as Standard.",
+    activeTiers:   ["T0 · Sentry", "T2 · Librarian", "T3 · Navigator", "Archivist"],
+    models:        ["qwen3.5:2b"] as string[],
+    identities:    ["synapses/sentry", "synapses/librarian", "synapses/navigator", "synapses/archivist"],
+    downloadLabel: "~2.7 GB",
     config: {
-      ModelIngest: "qwen2.5-coder:1.5b", ModelGuardian: "", ModelEnrich: "",
-      ModelOrchestrate: "", ModelArchivist: "",
-      Ingest: true, Guardian: false, Enrich: false, Orchestrate: false, Memorize: false,
+      ModelIngest: "synapses/sentry", ModelGuardian: "synapses/librarian",
+      ModelEnrich: "synapses/librarian", ModelOrchestrate: "synapses/navigator",
+      ModelArchivist: "synapses/archivist",
+      Ingest: true, Guardian: true, Enrich: true, Orchestrate: true, Memorize: true,
     },
   },
   standard: {
     label:         "Standard",
-    tagline:       "Indexing + code analysis",
-    description:   "Adds rule violation explanations and semantic code enrichment. One model shared across three tiers — same RAM footprint as Minimal.",
-    activeTiers:   ["T0 · Reflex", "T1 · Critic", "T2 · Librarian"],
-    models:        ["qwen2.5-coder:1.5b"] as string[],
-    downloadLabel: "~986 MB",
+    tagline:       "All 5 tiers active",
+    description:   "Critic tier is fully active alongside Librarian. Violations get dedicated explanations. Recommended — same 2.7 GB download as every other mode.",
+    activeTiers:   ["T0 · Sentry", "T1 · Critic", "T2 · Librarian", "T3 · Navigator", "Archivist"],
+    models:        ["qwen3.5:2b"] as string[],
+    identities:    ["synapses/sentry", "synapses/critic", "synapses/librarian", "synapses/navigator", "synapses/archivist"],
+    downloadLabel: "~2.7 GB",
     config: {
-      ModelIngest: "qwen2.5-coder:1.5b", ModelGuardian: "qwen2.5-coder:1.5b",
-      ModelEnrich: "qwen2.5-coder:1.5b", ModelOrchestrate: "", ModelArchivist: "",
-      Ingest: true, Guardian: true, Enrich: true, Orchestrate: false, Memorize: false,
+      ModelIngest: "synapses/sentry", ModelGuardian: "synapses/critic",
+      ModelEnrich: "synapses/librarian", ModelOrchestrate: "synapses/navigator",
+      ModelArchivist: "synapses/archivist",
+      Ingest: true, Guardian: true, Enrich: true, Orchestrate: true, Memorize: true,
     },
   },
   full: {
     label:         "Full",
-    tagline:       "Complete intelligence",
-    description:   "All 5 tiers active. Adds multi-agent coordination and session memory synthesis. Two models: a fast one for indexing and a reasoning one for analysis.",
-    activeTiers:   ["T0 · Reflex", "T1 · Critic", "T2 · Librarian", "T3 · Navigator", "T4 · Archivist"],
-    models:        ["qwen2.5-coder:1.5b", "qwen2.5-coder:3b"] as string[],
-    downloadLabel: "~2.9 GB",
+    tagline:       "Same as Standard",
+    description:   "Identical to Standard — all 5 tiers use the same qwen3.5:2b base. The architecture uses one shared model, so Full and Standard are equivalent.",
+    activeTiers:   ["T0 · Sentry", "T1 · Critic", "T2 · Librarian", "T3 · Navigator", "Archivist"],
+    models:        ["qwen3.5:2b"] as string[],
+    identities:    ["synapses/sentry", "synapses/critic", "synapses/librarian", "synapses/navigator", "synapses/archivist"],
+    downloadLabel: "~2.7 GB",
     config: {
-      ModelIngest: "qwen2.5-coder:1.5b", ModelGuardian: "qwen2.5-coder:1.5b",
-      ModelEnrich: "qwen2.5-coder:3b", ModelOrchestrate: "qwen2.5-coder:3b",
-      ModelArchivist: "qwen2.5-coder:3b",
+      ModelIngest: "synapses/sentry", ModelGuardian: "synapses/critic",
+      ModelEnrich: "synapses/librarian", ModelOrchestrate: "synapses/navigator",
+      ModelArchivist: "synapses/archivist",
       Ingest: true, Guardian: true, Enrich: true, Orchestrate: true, Memorize: true,
     },
   },
 } as const;
 
 type IntelligenceLevel = keyof typeof INTELLIGENCE_LEVELS;
+
+// The 5 Ollama personas that power the brain — all backed by qwen3.5:2b.
+// Each is a ~1 KB Modelfile: a system prompt + JSON schema, no extra weights.
+const BRAIN_IDENTITIES = [
+  {
+    tag:   "synapses/sentry",
+    tier:  "T0 · Sentry",
+    role:  "Classifies code entities and routes them to the right tier",
+    note:  "Called on every file save — always resident in RAM",
+  },
+  {
+    tag:   "synapses/critic",
+    tier:  "T1 · Critic",
+    role:  "Explains architectural rule violations and suggests concrete fixes",
+    note:  "Responses cached per (ruleID, file) — LLM called once per unique violation",
+  },
+  {
+    tag:   "synapses/librarian",
+    tier:  "T2 · Librarian",
+    role:  "Analyzes code graph slices for architectural patterns and risks",
+    note:  "Also covers Guardian's role in Optimal mode",
+  },
+  {
+    tag:   "synapses/navigator",
+    tier:  "T3 · Navigator",
+    role:  "Resolves multi-agent work scope conflicts",
+    note:  "Cold standby — called only when agent conflicts are detected",
+  },
+  {
+    tag:   "synapses/archivist",
+    tier:  "Archivist",
+    role:  "Synthesizes session tool-call transcripts into persistent memories",
+    note:  "Runs at session end — stores only architectural discoveries",
+  },
+];
 
 const SDLC_PHASES = [
   { key: "planning",    label: "Planning",    desc: "Agents explore freely. No quality gates or constraint enforcement — architectural rules are advisory only." },
@@ -84,9 +131,9 @@ const QUALITY_MODES = [
 // ── Level helpers ─────────────────────────────────────────────────────────────
 
 function recommendedLevel(ramGb: number): IntelligenceLevel {
-  if (ramGb >= 16) return "full";
+  if (ramGb >= 16) return "standard";
   if (ramGb >= 8)  return "standard";
-  return "minimal";
+  return "optimal"; // 8 GB or less — Critic off saves CPU cycles
 }
 
 function detectLevel(cfg: BrainConfig): IntelligenceLevel | "custom" {
@@ -273,6 +320,10 @@ export function Models() {
   const chatAbortRef  = useRef<AbortController | null>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
+  // Brain setup state
+  const [setupRunning, setSetupRunning] = useState(false);
+  const [setupOutput, setSetupOutput]   = useState("");
+
   // ── Derived ────────────────────────────────────────────────────────────────
 
   const activeOllamaUrl = brainConfig.OllamaURL || OLLAMA_URL_DEFAULT;
@@ -281,9 +332,17 @@ export function Models() {
   const recLevel        = ramGb > 0 ? recommendedLevel(ramGb) : "standard";
   const budgetGb        = ramGb > 0 ? parseFloat((ramGb * 0.18).toFixed(1)) : null;
 
-  // Models needed for current level that aren't installed
-  const levelModels      = currentLevel !== "custom" ? INTELLIGENCE_LEVELS[currentLevel].models : [];
-  const pendingDownloads = levelModels.filter((m) => !installedNames.includes(m));
+  // Brain setup derived state
+  const normName = (n: string) => n.replace(/:latest$/, "");
+  const baseModelInstalled  = installedNames.some((n) => normName(n) === "qwen3.5:2b");
+  const registeredIds       = BRAIN_IDENTITIES.filter((id) =>
+    installedNames.some((n) => normName(n) === id.tag)
+  );
+  const missingIds          = BRAIN_IDENTITIES.filter((id) =>
+    !installedNames.some((n) => normName(n) === id.tag)
+  );
+  const brainReady = baseModelInstalled && missingIds.length === 0;
+
 
   // ── Mount ──────────────────────────────────────────────────────────────────
 
@@ -411,6 +470,31 @@ export function Models() {
       addToast("success", "Settings saved. Restart Ollama for max-models to take effect.", 6000);
       setTimeout(() => setOllamaApplied(false), 3000);
     } catch (e) { addToast("error", `Failed: ${e}`); }
+  }
+
+  // ── Brain setup ────────────────────────────────────────────────────────────
+
+  async function setupBrain() {
+    setSetupRunning(true);
+    setSetupOutput("");
+    try {
+      // --skip-pull: base model must already be downloaded before calling this.
+      // The UI ensures qwen3.5:2b is pulled first via the existing pull mechanism.
+      const out = await invoke<string>("run_synapses_cmd", {
+        args: ["brain", "setup", "--skip-pull",
+               "--ollama", activeOllamaUrl,
+               "--mode", currentLevel !== "custom" ? currentLevel : "standard"],
+      });
+      setSetupOutput(out);
+      addToast("success", "AI tier identities registered successfully.");
+      await refreshModels();
+    } catch (e) {
+      const msg = String(e);
+      setSetupOutput(msg);
+      addToast("error", "Brain setup failed — see output below.");
+    } finally {
+      setSetupRunning(false);
+    }
   }
 
   // ── Delete ─────────────────────────────────────────────────────────────────
@@ -566,6 +650,162 @@ export function Models() {
       </div>
 
       {/* ════════════════════════════════════════════════════════════════════
+          SECTION 0 — BRAIN SETUP
+          ════════════════════════════════════════════════════════════════════ */}
+      <section className="settings-section">
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 16 }}>
+          <div>
+            <h2 className="section-title" style={{ marginBottom: 4 }}>Brain Setup</h2>
+            <p className="page-subtitle" style={{ margin: 0, fontSize: 12 }}>
+              One model download. Five AI tiers. All intelligence runs locally on your machine.
+            </p>
+          </div>
+          {brainReady && (
+            <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--success)", flexShrink: 0, paddingTop: 2 }}>
+              <CheckCircle size={14} /> Brain Ready
+            </span>
+          )}
+        </div>
+
+        {/* Base model card */}
+        <div className="resource-card" style={{ marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+            <Layers size={18} style={{ color: "var(--accent)", flexShrink: 0, marginTop: 1 }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
+                <div>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>qwen3.5:2b</span>
+                  <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: 10 }}>
+                    ~2.7 GB · Q8 quantization · Qwen 3.5 2B
+                  </span>
+                </div>
+                {baseModelInstalled
+                  ? <span style={{ fontSize: 11, color: "var(--success)", display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                      <CheckCircle size={12} /> downloaded
+                    </span>
+                  : <span style={{ fontSize: 11, color: "var(--warning)", flexShrink: 0 }}>not downloaded</span>
+                }
+              </div>
+              <p style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.6, margin: "0 0 8px" }}>
+                This is the <strong style={{ color: "var(--text)" }}>foundation model</strong> for all 5 AI tiers.
+                Download it once — every tier shares the same 2.7 GB in RAM.
+                No separate model per tier, no extra downloads ever.
+              </p>
+              {!baseModelInstalled && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <PullProgressRow modelName="qwen3.5:2b" />
+                  <button
+                    className="btn-primary"
+                    style={{ fontSize: 12, padding: "7px 16px", alignSelf: "flex-start" }}
+                    onClick={() => pullModel("qwen3.5:2b")}
+                    disabled={pullStatuses["qwen3.5:2b"] === "pulling"}
+                  >
+                    <Download size={12} /> Download qwen3.5:2b (~2.7 GB)
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* AI tier identities */}
+        <div className="resource-card" style={{ marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+            <Zap size={18} style={{ color: "var(--accent)", flexShrink: 0, marginTop: 1 }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
+                <div>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>AI Tier Identities</span>
+                  <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: 10 }}>
+                    5 personas · ~1 KB each · no extra download
+                  </span>
+                </div>
+                <span style={{ fontSize: 11, color: registeredIds.length === BRAIN_IDENTITIES.length ? "var(--success)" : "var(--text-dim)", flexShrink: 0 }}>
+                  {registeredIds.length} / {BRAIN_IDENTITIES.length} registered
+                </span>
+              </div>
+              <p style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.6, margin: "0 0 12px" }}>
+                Each persona is a Modelfile — a small config that gives the base model a specialized role and JSON output schema.
+                Think of them as "roles" for the same actor.
+              </p>
+
+              {/* Identity rows */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+                {BRAIN_IDENTITIES.map((id) => {
+                  const registered = installedNames.some((n) => normName(n) === id.tag);
+                  return (
+                    <div key={id.tag} style={{
+                      display: "flex", alignItems: "flex-start", gap: 10,
+                      padding: "8px 10px", borderRadius: "var(--radius-sm)",
+                      background: registered ? "rgba(34,197,94,0.05)" : "var(--surface)",
+                      border: `1px solid ${registered ? "rgba(34,197,94,0.2)" : "var(--border)"}`,
+                    }}>
+                      <span style={{ fontSize: 11, marginTop: 1, flexShrink: 0, color: registered ? "var(--success)" : "var(--text-dim)" }}>
+                        {registered ? "✓" : "○"}
+                      </span>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
+                          <code style={{ fontSize: 11, color: "var(--accent)" }}>{id.tag}</code>
+                          <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 3,
+                            background: "var(--surface2)", color: "var(--text-dim)", border: "1px solid var(--border)" }}>
+                            {id.tier}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{id.role}</div>
+                        <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, fontStyle: "italic" }}>{id.note}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Register button — only shown when base model is installed but identities are missing */}
+              {baseModelInstalled && missingIds.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <button
+                    className="btn-primary"
+                    style={{ fontSize: 12, padding: "7px 16px", alignSelf: "flex-start" }}
+                    onClick={setupBrain}
+                    disabled={setupRunning}
+                  >
+                    {setupRunning
+                      ? <><RefreshCw size={12} className="spin" /> Registering tiers...</>
+                      : <><Zap size={12} /> Register {missingIds.length} missing tier{missingIds.length > 1 ? "s" : ""}</>
+                    }
+                  </button>
+                  {setupOutput && (
+                    <pre style={{
+                      fontSize: 10, color: "var(--text-muted)", background: "var(--surface)",
+                      border: "1px solid var(--border)", borderRadius: "var(--radius-sm)",
+                      padding: "8px 10px", overflowX: "auto", maxHeight: 180, whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                    }}>
+                      {setupOutput}
+                    </pre>
+                  )}
+                </div>
+              )}
+
+              {/* Not installed yet — explain that base model must come first */}
+              {!baseModelInstalled && missingIds.length > 0 && (
+                <p style={{ fontSize: 11, color: "var(--text-dim)", margin: 0 }}>
+                  Download qwen3.5:2b first — then register the AI tier identities in one click.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* All ready state */}
+        {brainReady && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--success)" }}>
+            <CheckCircle size={14} />
+            All 5 AI tier identities are registered and ready. Select an intelligence level below.
+          </div>
+        )}
+      </section>
+
+      {/* ════════════════════════════════════════════════════════════════════
           SECTION 1 — INTELLIGENCE LEVEL
           ════════════════════════════════════════════════════════════════════ */}
       <section className="settings-section">
@@ -651,7 +891,7 @@ export function Models() {
                 {/* Download size */}
                 <div style={{ fontSize: 11, color: "var(--text-dim)", display: "flex", alignItems: "center", gap: 4 }}>
                   <Download size={10} />
-                  {level.downloadLabel} · {level.models.length} model{level.models.length > 1 ? "s" : ""}
+                  {level.downloadLabel} · qwen3.5:2b · {level.identities.length} tier{level.identities.length > 1 ? "s" : ""}
                 </div>
               </div>
             );
@@ -670,33 +910,18 @@ export function Models() {
           </div>
         )}
 
-        {/* Download status */}
+        {/* Download / ready status for selected level */}
         {currentLevel !== "custom" && (
           <>
-            {pendingDownloads.length > 0 ? (
-              <div className="resource-card card-warn" style={{ gap: 10 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <AlertTriangle size={13} style={{ color: "var(--warning)" }} />
-                  <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>
-                    {pendingDownloads.length} model{pendingDownloads.length > 1 ? "s" : ""} need to be downloaded
-                  </span>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  {pendingDownloads.map((m) => <PullProgressRow key={m} modelName={m} />)}
-                </div>
-                <button
-                  className="btn-primary"
-                  style={{ fontSize: 12, padding: "7px 16px", alignSelf: "flex-start" }}
-                  onClick={() => pendingDownloads.forEach((m) => pullModel(m))}
-                  disabled={pendingDownloads.every((m) => pullStatuses[m] === "pulling")}
-                >
-                  <Download size={12} /> Download {pendingDownloads.length > 1 ? `${pendingDownloads.length} models` : pendingDownloads[0]}
-                </button>
+            {!brainReady ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text-muted)" }}>
+                <Info size={13} style={{ color: "var(--accent)" }} />
+                Complete Brain Setup above to activate the {INTELLIGENCE_LEVELS[currentLevel].label} level.
               </div>
             ) : (
               <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--success)" }}>
                 <CheckCircle size={14} />
-                {INTELLIGENCE_LEVELS[currentLevel].label} level is ready.
+                {INTELLIGENCE_LEVELS[currentLevel].label} level is active.
               </div>
             )}
           </>
