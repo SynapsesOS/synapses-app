@@ -28,3 +28,6 @@ dist-ssr
 src-tauri/resources/synapses-aarch64-apple-darwin
 src-tauri/resources/synapses-x86_64-apple-darwin
 src-tauri/resources/synapses-x86_64-unknown-linux-gnu
+
+# Test coverage reports
+coverage/
