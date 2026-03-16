@@ -9,16 +9,6 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react()],
 
-  resolve: {
-    alias: {
-      "@tauri-apps/api/core": path.resolve(__dirname, "src/__mocks__/@tauri-apps/api/core.ts"),
-      "@tauri-apps/api/event": path.resolve(__dirname, "src/__mocks__/@tauri-apps/api/event.ts"),
-      "@tauri-apps/plugin-dialog": path.resolve(__dirname, "src/__mocks__/@tauri-apps/plugin-dialog.ts"),
-      "@tauri-apps/plugin-opener": path.resolve(__dirname, "src/__mocks__/@tauri-apps/plugin-opener.ts"),
-      "@tauri-apps/plugin-os": path.resolve(__dirname, "src/__mocks__/@tauri-apps/plugin-os.ts"),
-    },
-  },
-
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
@@ -45,6 +35,16 @@ export default defineConfig(async () => ({
     globals: true,
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
+    // Aliases for @tauri-apps/* → mocks only apply during vitest runs,
+    // NOT during tauri dev/build (mocks import 'vi' from vitest which
+    // crashes in the browser).
+    alias: {
+      "@tauri-apps/api/core": path.resolve(__dirname, "src/__mocks__/@tauri-apps/api/core.ts"),
+      "@tauri-apps/api/event": path.resolve(__dirname, "src/__mocks__/@tauri-apps/api/event.ts"),
+      "@tauri-apps/plugin-dialog": path.resolve(__dirname, "src/__mocks__/@tauri-apps/plugin-dialog.ts"),
+      "@tauri-apps/plugin-opener": path.resolve(__dirname, "src/__mocks__/@tauri-apps/plugin-opener.ts"),
+      "@tauri-apps/plugin-os": path.resolve(__dirname, "src/__mocks__/@tauri-apps/plugin-os.ts"),
+    },
     coverage: {
       provider: "v8",
       include: ["src/**/*.{ts,tsx}"],
