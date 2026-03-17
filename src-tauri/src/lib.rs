@@ -134,6 +134,55 @@ async fn run_synapses_cmd(args: Vec<String>) -> Result<String, String> {
     }
 }
 
+/// Returns the running daemon's version (from /api/admin/health) and the
+/// installed binary version (from `synapses version`), plus a mismatch flag.
+/// The frontend calls this on startup to detect a stale daemon (IMP-EVAL-1).
+#[tauri::command]
+async fn get_daemon_version() -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .unwrap_or_default();
+
+    let running = match client
+        .get("http://127.0.0.1:11435/api/admin/health")
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => r
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| v["version"].as_str().map(String::from))
+            .unwrap_or_else(|| "unknown".to_string()),
+        _ => return Ok(serde_json::json!({ "error": "daemon not reachable" })),
+    };
+
+    let installed = match find_binary("synapses") {
+        Some(bin) => match std::process::Command::new(bin).arg("version").output() {
+            Ok(out) => String::from_utf8_lossy(&out.stdout)
+                .trim()
+                .trim_start_matches("synapses ")
+                .to_string(),
+            Err(_) => "unknown".to_string(),
+        },
+        None => "not found".to_string(),
+    };
+
+    let mismatch = running != "unknown"
+        && installed != "unknown"
+        && installed != "not found"
+        && running != installed
+        && running != "dev"
+        && installed != "dev";
+
+    Ok(serde_json::json!({
+        "running": running,
+        "installed": installed,
+        "mismatch": mismatch,
+    }))
+}
+
 // ── Embedded Modelfile content ────────────────────────────────────────────────
 // Single source of truth for the Tauri app. Kept in sync with
 // synapses/cmd/synapses/brain_setup.go — update both if Modelfiles change.
@@ -1046,6 +1095,10 @@ async fn health_watch_loop(app: AppHandle, mgr: SidecarManager) {
     adopt_running_sidecars(mgr.clone()).await;
     sleep(Duration::from_secs(3)).await;
 
+    // IMP-EVAL-1: check version mismatch once after the daemon is first healthy.
+    // Reset to false after any restart so we re-check the freshly spawned binary.
+    let mut version_notified = false;
+
     loop {
         let services: Vec<(String, u16, String, Option<String>)> = {
             let m = mgr.lock().unwrap();
@@ -1119,6 +1172,39 @@ async fn health_watch_loop(app: AppHandle, mgr: SidecarManager) {
                         let _ = app.emit("service-offline", &name);
                     }
                 }
+            }
+        }
+
+        // Version mismatch check (IMP-EVAL-1): emit once after the daemon is healthy.
+        // Resets when a restart is recorded so the freshly spawned binary is re-checked.
+        if !version_notified {
+            let daemon_healthy = mgr
+                .lock()
+                .unwrap()
+                .sidecars
+                .get("synapses")
+                .map(|s| s.status == ServiceStatus::Healthy)
+                .unwrap_or(false);
+
+            if daemon_healthy {
+                if let Ok(result) = get_daemon_version().await {
+                    if result["mismatch"].as_bool().unwrap_or(false) {
+                        let _ = app.emit("version-mismatch", &result);
+                    }
+                }
+                version_notified = true;
+            }
+        } else {
+            // Reset flag after a restart so we re-check the new binary.
+            let restarted = mgr
+                .lock()
+                .unwrap()
+                .sidecars
+                .get("synapses")
+                .map(|s| s.last_restart.map(|t| t.elapsed() < Duration::from_secs(15)).unwrap_or(false))
+                .unwrap_or(false);
+            if restarted {
+                version_notified = false;
             }
         }
 
@@ -1218,6 +1304,7 @@ pub fn run() {
             enable_service,
             // CLI
             run_synapses_cmd,
+            get_daemon_version,
             register_brain_identity,
             // App state
             get_synapses_data_dir,
