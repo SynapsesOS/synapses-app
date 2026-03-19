@@ -1,8 +1,15 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Plus, RefreshCw, Trash2, FolderOpen, Activity, ChevronDown, ChevronRight } from "lucide-react";
 import { useToast } from "../context/ToastContext";
+
+interface IndexingProgress {
+  state: "idle" | "indexing" | "ready";
+  files_done: number;
+  files_total: number;
+  pct: number;
+}
 
 const SDLC_PHASES = ["development", "testing", "review", "production"] as const;
 type SdlcPhase = (typeof SDLC_PHASES)[number];
@@ -44,6 +51,8 @@ export function Projects() {
   const [indexOutput, setIndexOutput] = useState<Record<string, string>>({});
   const [expanded, setExpanded] = useState<string | null>(null);
   const [sdlcPhases, setSdlcPhases] = useState<Record<string, SdlcPhase>>({});
+  const [indexProgress, setIndexProgress] = useState<IndexingProgress | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => { loadProjects(); }, []);
 
@@ -65,7 +74,16 @@ export function Projects() {
 
   async function doIndex(path: string) {
     setIndexingPath(path);
-    setIndexOutput((o) => ({ ...o, [path]: "Indexing…" }));
+    setIndexProgress(null);
+    setIndexOutput((o) => ({ ...o, [path]: "" }));
+
+    pollRef.current = setInterval(async () => {
+      try {
+        const p = await invoke<IndexingProgress>("get_indexing_progress");
+        if (p.state === "indexing" || p.state === "ready") setIndexProgress(p);
+      } catch { /* ignore */ }
+    }, 500);
+
     try {
       const out = await invoke<string>("run_synapses_cmd", { args: ["index", "--path", path] });
       setIndexOutput((o) => ({ ...o, [path]: out || "Indexed successfully." }));
@@ -75,7 +93,9 @@ export function Projects() {
       setIndexOutput((o) => ({ ...o, [path]: String(e) }));
       addToast("error", `Indexing failed: ${e}`);
     } finally {
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
       setIndexingPath(null);
+      setIndexProgress(null);
     }
   }
 
@@ -104,7 +124,25 @@ export function Projects() {
         </button>
       </div>
 
-      {projects.length === 0 ? (
+      {/* Card for a brand-new project being indexed (not yet in the list) */}
+      {indexingPath && !projects.some((p) => p.path === indexingPath) && (
+        <div className="project-card" style={{ marginBottom: 12 }}>
+          <div className="project-card-header">
+            <div className="project-info" style={{ flex: 1 }}>
+              <div className="project-name-row">
+                <span className="project-name">{indexingPath.split("/").pop()}</span>
+                <span className="project-indexing-badge">
+                  <RefreshCw size={11} className="spin" /> indexing…
+                </span>
+              </div>
+              <div className="project-path">{indexingPath}</div>
+              <IndexProgressBar progress={indexProgress} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {projects.length === 0 && !indexingPath ? (
         <div className="empty-state-large">
           <FolderOpen size={48} className="empty-icon" />
           <p>No projects indexed yet.</p>
@@ -146,29 +184,34 @@ export function Projects() {
                       )}
                     </div>
                     <div className="project-path">{p.path}</div>
-                    <div className="project-meta-row">
-                      {p.nodes != null && (
-                        <span className="project-meta-item">
-                          <Activity size={11} /> {p.nodes.toLocaleString()} nodes
-                        </span>
-                      )}
-                      {p.files != null && (
-                        <span className="project-meta-item">{p.files.toLocaleString()} files</span>
-                      )}
-                      {p.edges != null && (
-                        <span className="project-meta-item">{p.edges.toLocaleString()} edges</span>
-                      )}
-                      {p.last_indexed && (
-                        <span className="project-meta-item">indexed {relativeTime(p.last_indexed)}</span>
-                      )}
-                    </div>
+                    {isIndexing
+                      ? <IndexProgressBar progress={indexProgress} />
+                      : (
+                        <div className="project-meta-row">
+                          {p.nodes != null && (
+                            <span className="project-meta-item">
+                              <Activity size={11} /> {p.nodes.toLocaleString()} nodes
+                            </span>
+                          )}
+                          {p.files != null && (
+                            <span className="project-meta-item">{p.files.toLocaleString()} files</span>
+                          )}
+                          {p.edges != null && (
+                            <span className="project-meta-item">{p.edges.toLocaleString()} edges</span>
+                          )}
+                          {p.last_indexed && (
+                            <span className="project-meta-item">indexed {relativeTime(p.last_indexed)}</span>
+                          )}
+                        </div>
+                      )
+                    }
                   </div>
                   <div className="project-actions">
                     <button
                       className="icon-btn"
                       title="Re-index"
                       onClick={() => doIndex(p.path)}
-                      disabled={isIndexing}
+                      disabled={!!indexingPath}
                     >
                       <RefreshCw size={14} className={isIndexing ? "spin" : ""} />
                     </button>
@@ -176,6 +219,7 @@ export function Projects() {
                       className="icon-btn icon-btn-danger"
                       title="Remove"
                       onClick={() => removeProject(p.path)}
+                      disabled={isIndexing}
                     >
                       <Trash2 size={14} />
                     </button>
@@ -215,6 +259,21 @@ export function Projects() {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+function IndexProgressBar({ progress }: { progress: IndexingProgress | null }) {
+  const pct = progress?.pct ?? 0;
+  const label = progress && progress.files_total > 0
+    ? `${progress.files_done.toLocaleString()} / ${progress.files_total.toLocaleString()} files · ${pct}%`
+    : "Building file list…";
+  return (
+    <div className="index-progress-wrap">
+      <div className="index-progress-bar-track">
+        <div className="index-progress-bar-fill" style={{ width: `${pct}%` }} />
+      </div>
+      <div className="index-progress-label">{label}</div>
     </div>
   );
 }

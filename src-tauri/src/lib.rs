@@ -183,6 +183,30 @@ async fn get_daemon_version() -> Result<serde_json::Value, String> {
     }))
 }
 
+/// Returns the live `indexing_progress` object from the daemon health endpoint.
+/// Returns `{"state":"idle"}` if the daemon is unreachable or not indexing.
+/// Designed to be polled at ~500ms while the UI is waiting for indexing to finish.
+#[tauri::command]
+async fn get_indexing_progress() -> serde_json::Value {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(1))
+        .build()
+        .unwrap_or_default();
+    match client
+        .get("http://127.0.0.1:11435/api/admin/health")
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => r
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| v.get("indexing_progress").cloned())
+            .unwrap_or(serde_json::json!({ "state": "idle" })),
+        _ => serde_json::json!({ "state": "idle" }),
+    }
+}
+
 // ── Embedded Modelfile content ────────────────────────────────────────────────
 // Single source of truth for the Tauri app. Kept in sync with
 // synapses/cmd/synapses/brain_setup.go — update both if Modelfiles change.
@@ -1305,6 +1329,7 @@ pub fn run() {
             // CLI
             run_synapses_cmd,
             get_daemon_version,
+            get_indexing_progress,
             register_brain_identity,
             // App state
             get_synapses_data_dir,

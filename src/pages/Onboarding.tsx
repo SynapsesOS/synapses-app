@@ -7,6 +7,13 @@ import {
   AlertCircle, RefreshCw, Code2, Download, Info,
 } from "lucide-react";
 
+interface IndexingProgress {
+  state: "idle" | "indexing" | "ready";
+  files_done: number;
+  files_total: number;
+  pct: number;
+}
+
 interface Props {
   onComplete: () => void;
 }
@@ -48,6 +55,8 @@ export function Onboarding({ onComplete }: Props) {
   const [indexedPath, setIndexedPath] = useState<string | null>(null);
   const [indexing, setIndexing] = useState(false);
   const [indexOutput, setIndexOutput] = useState("");
+  const [indexProgress, setIndexProgress] = useState<IndexingProgress | null>(null);
+  const indexPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Step 2 — Ollama / Brain
   const [ollamaStatus, setOllamaStatus] = useState<"checking" | "ok" | "missing">("checking");
@@ -151,7 +160,17 @@ export function Onboarding({ onComplete }: Props) {
     const selected = await open({ directory: true, multiple: false, title: "Select your project directory" });
     if (!selected || typeof selected !== "string") return;
     setIndexing(true);
-    setIndexOutput("Indexing…");
+    setIndexOutput("");
+    setIndexProgress(null);
+
+    // Poll indexing_progress from the daemon every 500ms while indexing.
+    indexPollRef.current = setInterval(async () => {
+      try {
+        const p = await invoke<IndexingProgress>("get_indexing_progress");
+        if (p.state === "indexing" || p.state === "ready") setIndexProgress(p);
+      } catch { /* daemon not ready yet, ignore */ }
+    }, 500);
+
     try {
       const out = await invoke<string>("run_synapses_cmd", { args: ["index", "--path", selected] });
       setIndexedPath(selected);
@@ -159,6 +178,7 @@ export function Onboarding({ onComplete }: Props) {
     } catch (e) {
       setIndexOutput(`Error: ${e}`);
     } finally {
+      if (indexPollRef.current) { clearInterval(indexPollRef.current); indexPollRef.current = null; }
       setIndexing(false);
     }
   }
@@ -209,10 +229,27 @@ export function Onboarding({ onComplete }: Props) {
         Go, TypeScript, Python, Rust, Java, and 13 more languages.
       </p>
       {!indexedPath ? (
-        <button className="btn-primary btn-large" onClick={handleSelectProject} disabled={indexing}>
-          <FolderOpen size={16} />
-          {indexing ? "Indexing…" : "Choose project directory"}
-        </button>
+        <>
+          <button className="btn-primary btn-large" onClick={handleSelectProject} disabled={indexing}>
+            <FolderOpen size={16} />
+            {indexing ? "Indexing…" : "Choose project directory"}
+          </button>
+          {indexing && (
+            <div className="index-progress-wrap">
+              <div className="index-progress-bar-track">
+                <div
+                  className="index-progress-bar-fill"
+                  style={{ width: `${indexProgress?.pct ?? 0}%` }}
+                />
+              </div>
+              <div className="index-progress-label">
+                {indexProgress && indexProgress.files_total > 0
+                  ? `${indexProgress.files_done.toLocaleString()} / ${indexProgress.files_total.toLocaleString()} files · ${indexProgress.pct}%`
+                  : "Building file list…"}
+              </div>
+            </div>
+          )}
+        </>
       ) : (
         <div className="onboarding-success">
           <CheckCircle size={20} className="success-icon" />

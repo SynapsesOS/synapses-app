@@ -903,6 +903,34 @@ html, body, #root {
   line-height: 1.6;
 }
 
+/* ── Indexing progress bar (onboarding + projects) ───────────────────────── */
+.index-progress-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 10px;
+  width: 100%;
+}
+.index-progress-bar-track {
+  height: 5px;
+  background: var(--surface3);
+  border-radius: 99px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.index-progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-h));
+  border-radius: 99px;
+  transition: width 0.4s ease;
+  min-width: 2px;
+}
+.index-progress-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── Spinner ──────────────────────────────────────────────────────────────── */
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin 0.75s linear infinite; }
