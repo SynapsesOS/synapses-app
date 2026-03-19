@@ -1,8 +1,16 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Plus, RefreshCw, Trash2, FolderOpen, Activity, ChevronDown, ChevronRight } from "lucide-react";
+import { Plus, RefreshCw, Trash2, FolderOpen, Activity, ChevronDown, ChevronRight, Search, Loader } from "lucide-react";
 import { useToast } from "../context/ToastContext";
+
+interface EntityRow {
+  id: string;
+  name: string;
+  type: string;
+  file: string;
+  domain: string;
+}
 
 interface IndexingProgress {
   state: "idle" | "indexing" | "ready";
@@ -54,7 +62,56 @@ export function Projects() {
   const [indexProgress, setIndexProgress] = useState<IndexingProgress | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Search tab state
+  const [activeTab, setActiveTab] = useState<"projects" | "search">("projects");
+  const [searchProject, setSearchProject] = useState<string>("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<EntityRow[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searched, setSearched] = useState(false);
+  const searchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => { loadProjects(); }, []);
+
+  // Auto-select first project for search when projects load
+  useEffect(() => {
+    if (projects.length > 0 && !searchProject) {
+      setSearchProject(projects[0].path);
+    }
+  }, [projects, searchProject]);
+
+  // Debounced entity search
+  useEffect(() => {
+    if (searchDebounce.current) clearTimeout(searchDebounce.current);
+    if (!searchQuery.trim() || !searchProject) {
+      setSearchResults([]);
+      setSearched(false);
+      setSearchError(null);
+      return;
+    }
+    searchDebounce.current = setTimeout(async () => {
+      setSearchLoading(true);
+      setSearchError(null);
+      setSearched(true);
+      try {
+        const res = await fetch(
+          `http://127.0.0.1:11435/api/search_entities?project=${encodeURIComponent(searchProject)}&q=${encodeURIComponent(searchQuery.trim())}`,
+          { signal: AbortSignal.timeout(5000) }
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        setSearchResults(data.entities || []);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setSearchError(msg.includes("Failed to fetch") ? "Daemon offline" : `Search failed: ${msg}`);
+        setSearchResults([]);
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 300);
+    return () => { if (searchDebounce.current) clearTimeout(searchDebounce.current); };
+  }, [searchQuery, searchProject]);
 
   async function loadProjects() {
     try {
@@ -119,10 +176,121 @@ export function Projects() {
     <div className="page">
       <div className="page-header">
         <h1 className="page-title">Projects</h1>
-        <button className="btn-primary" onClick={addProject} disabled={!!indexingPath}>
-          <Plus size={14} /> Add Project
+        {activeTab === "projects" && (
+          <button className="btn-primary" onClick={addProject} disabled={!!indexingPath}>
+            <Plus size={14} /> Add Project
+          </button>
+        )}
+      </div>
+
+      {/* Tabs */}
+      <div className="page-tabs">
+        <button
+          className={`page-tab ${activeTab === "projects" ? "page-tab-active" : ""}`}
+          onClick={() => setActiveTab("projects")}
+        >
+          Projects
+        </button>
+        <button
+          className={`page-tab ${activeTab === "search" ? "page-tab-active" : ""}`}
+          onClick={() => setActiveTab("search")}
+        >
+          Search Entities
         </button>
       </div>
+
+      {/* ── Search tab ────────────────────────────────────────────── */}
+      {activeTab === "search" && (
+        <div>
+          {projects.length === 0 ? (
+            <div className="empty-state-large">
+              <FolderOpen size={48} className="empty-icon" />
+              <p>No projects indexed yet.</p>
+              <p style={{ fontSize: 12, color: "var(--text-dim)" }}>
+                Add a project first, then search its entities here.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="explorer-controls">
+                <div className="field-group">
+                  <label className="field-label">Project</label>
+                  <select
+                    className="text-input explorer-project-select"
+                    value={searchProject}
+                    onChange={(e) => { setSearchProject(e.target.value); setSearchQuery(""); setSearchResults([]); setSearched(false); }}
+                  >
+                    {projects.map((p) => (
+                      <option key={p.path} value={p.path}>{p.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field-group">
+                  <label className="field-label">Search</label>
+                  <div className="explorer-search-box">
+                    <Search size={15} className="explorer-search-icon" />
+                    <input
+                      type="text"
+                      className="text-input explorer-search-input"
+                      placeholder="Function, struct, file, endpoint…"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      disabled={searchLoading}
+                    />
+                    {searchLoading && <Loader size={15} className="explorer-spinner" />}
+                  </div>
+                </div>
+              </div>
+
+              {searchError && (
+                <div className="offline-banner" style={{ marginBottom: 12 }}>
+                  <span>{searchError}</span>
+                </div>
+              )}
+
+              <div className="explorer-results">
+                {!searched ? (
+                  <div className="empty-state"><p>Type to search code entities in the selected project</p></div>
+                ) : searchResults.length === 0 ? (
+                  <div className="empty-state"><p>No entities found. Try different keywords.</p></div>
+                ) : (
+                  <div className="an-table">
+                    <div className="an-table-head">
+                      <div className="an-table-row">
+                        <div className="an-table-cell" style={{ flex: "0 0 35%" }}>Entity</div>
+                        <div className="an-table-cell" style={{ flex: "0 0 15%" }}>Type</div>
+                        <div className="an-table-cell" style={{ flex: "0 0 40%" }}>File</div>
+                        <div className="an-table-cell" style={{ flex: "0 0 10%" }}>Domain</div>
+                      </div>
+                    </div>
+                    <div className="an-table-body">
+                      {searchResults.map((e) => (
+                        <div key={e.id} className="an-table-row">
+                          <div className="an-table-cell" style={{ flex: "0 0 35%" }} title={e.name}>{e.name}</div>
+                          <div className="an-table-cell" style={{ flex: "0 0 15%" }}>
+                            <span className="entity-type-badge">{e.type}</span>
+                          </div>
+                          <div className="an-table-cell an-table-cell-mono" style={{ flex: "0 0 40%" }} title={e.file}>
+                            {e.file || "—"}
+                          </div>
+                          <div className="an-table-cell" style={{ flex: "0 0 10%" }}>
+                            {e.domain !== "code" && (
+                              <span className={`domain-badge domain-badge--${e.domain}`}>{e.domain}</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── Projects tab ──────────────────────────────────────────── */}
+      {activeTab === "projects" && <>
 
       {/* Card for a brand-new project being indexed (not yet in the list) */}
       {indexingPath && !projects.some((p) => p.path === indexingPath) && (
@@ -259,6 +427,8 @@ export function Projects() {
           })}
         </div>
       )}
+
+      </>}
     </div>
   );
 }

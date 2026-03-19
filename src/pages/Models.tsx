@@ -1033,7 +1033,7 @@ export function Models() {
                   padding: "14px 16px",
                   borderRadius: "var(--radius)",
                   border: `1.5px solid ${isSelected ? "var(--accent)" : "var(--border)"}`,
-                  background: isSelected ? "rgba(99,102,241,0.07)" : "var(--surface2)",
+                  background: isSelected ? "var(--accent-soft)" : "var(--surface2)",
                   cursor: "pointer",
                   transition: "border-color 0.15s, background 0.15s",
                   position: "relative",
@@ -1073,9 +1073,9 @@ export function Models() {
                   {level.activeTiers.map((t) => (
                     <span key={t} style={{
                       fontSize: 10, padding: "2px 7px", borderRadius: 4,
-                      background: isSelected ? "rgba(99,102,241,0.15)" : "var(--surface)",
+                      background: isSelected ? "var(--accent-soft)" : "var(--surface)",
                       color: isSelected ? "var(--accent)" : "var(--text-dim)",
-                      border: `1px solid ${isSelected ? "rgba(99,102,241,0.3)" : "var(--border)"}`,
+                      border: `1px solid ${isSelected ? "var(--accent-glow)" : "var(--border)"}`,
                       fontWeight: 600,
                     }}>
                       {t}

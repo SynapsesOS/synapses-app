@@ -1,61 +1,35 @@
+import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
   FolderOpen,
-  Users,
-  Brain,
-  BarChart2,
-  Database,
-  Shield,
-  Settings,
   Zap,
-  Search,
+  Brain,
+  Settings,
+  Sun,
+  Moon,
 } from "lucide-react";
 
-interface NavItem {
-  to: string;
-  icon: React.ElementType;
-  label: string;
-}
-
-interface NavGroup {
-  label: string;
-  items: NavItem[];
-}
-
-const NAV_GROUPS: NavGroup[] = [
-  {
-    label: "Control",
-    items: [
-      { to: "/", icon: LayoutDashboard, label: "Dashboard" },
-      { to: "/projects", icon: FolderOpen, label: "Projects" },
-      { to: "/agents", icon: Users, label: "Agents" },
-    ],
-  },
-  {
-    label: "Intelligence",
-    items: [
-      { to: "/explorer", icon: Search, label: "Explorer" },
-      { to: "/models", icon: Brain, label: "Models & Brain" },
-    ],
-  },
-  {
-    label: "Observe",
-    items: [
-      { to: "/analytics", icon: BarChart2, label: "Analytics" },
-      { to: "/memory", icon: Database, label: "Memory" },
-    ],
-  },
-  {
-    label: "System",
-    items: [
-      { to: "/privacy", icon: Shield, label: "Privacy & Data" },
-      { to: "/settings", icon: Settings, label: "Settings" },
-    ],
-  },
+const NAV_ITEMS = [
+  { to: "/",          icon: LayoutDashboard, label: "Home"     },
+  { to: "/projects",  icon: FolderOpen,      label: "Projects" },
+  { to: "/activity",  icon: Zap,             label: "Activity" },
+  { to: "/brain",     icon: Brain,           label: "Brain"    },
+  { to: "/settings",  icon: Settings,        label: "Settings" },
 ];
 
 export function Sidebar() {
+  const [dark, setDark] = useState<boolean>(() => {
+    const saved = localStorage.getItem("synapses-theme");
+    if (saved) return saved === "dark";
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+    localStorage.setItem("synapses-theme", dark ? "dark" : "light");
+  }, [dark]);
+
   return (
     <nav className="sidebar">
       <div className="sidebar-logo">
@@ -63,31 +37,33 @@ export function Sidebar() {
         <span className="logo-text">Synapses</span>
       </div>
 
-      <div className="nav-groups">
-        {NAV_GROUPS.map((group) => (
-          <div key={group.label} className="nav-group">
-            <div className="nav-section-label">{group.label}</div>
-            <ul className="nav-list">
-              {group.items.map(({ to, icon: Icon, label }) => (
-                <li key={to}>
-                  <NavLink
-                    to={to}
-                    end={to === "/"}
-                    className={({ isActive }) =>
-                      `nav-item ${isActive ? "active" : ""}`
-                    }
-                  >
-                    <Icon size={15} />
-                    <span>{label}</span>
-                  </NavLink>
-                </li>
-              ))}
-            </ul>
-          </div>
+      <ul className="nav-list" style={{ gap: 2 }}>
+        {NAV_ITEMS.map(({ to, icon: Icon, label }) => (
+          <li key={to}>
+            <NavLink
+              to={to}
+              end={to === "/"}
+              className={({ isActive }) =>
+                `nav-item ${isActive ? "active" : ""}`
+              }
+            >
+              <Icon size={15} />
+              <span>{label}</span>
+            </NavLink>
+          </li>
         ))}
-      </div>
+      </ul>
 
-      <div className="sidebar-footer">v0.2.0</div>
+      <div className="sidebar-footer">
+        <span className="sidebar-version">v0.2.0</span>
+        <button
+          className="theme-toggle"
+          onClick={() => setDark((d) => !d)}
+          title={dark ? "Switch to light mode" : "Switch to dark mode"}
+        >
+          {dark ? <Sun size={13} /> : <Moon size={13} />}
+        </button>
+      </div>
     </nav>
   );
 }

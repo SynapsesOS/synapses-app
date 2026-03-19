@@ -3,24 +3,24 @@
 
 /* ── Design tokens ────────────────────────────────────────────────────────── */
 :root {
-  /* Base */
-  --bg:          #080c14;
-  --surface:     #0d1220;
-  --surface2:    #131929;
-  --surface3:    #1a2138;
-  --border:      #1e2740;
-  --border-hi:   #2a3558;
+  /* Base — warm dark (Claude-inspired) */
+  --bg:          #0f0d0c;
+  --surface:     #171412;
+  --surface2:    #1f1b18;
+  --surface3:    #27221e;
+  --border:      #352e27;
+  --border-hi:   #463d34;
 
-  /* Text */
-  --text:        #e4eaf5;
-  --text-muted:  #6b7a9e;
-  --text-dim:    #3d4d70;
+  /* Text — warm cream */
+  --text:        #f0e8df;
+  --text-muted:  #9c8c7e;
+  --text-dim:    #5c5048;
 
-  /* Accent — indigo/violet */
-  --accent:      #6366f1;
-  --accent-h:    #818cf8;
-  --accent-soft: rgba(99, 102, 241, 0.12);
-  --accent-glow: rgba(99, 102, 241, 0.25);
+  /* Accent — warm sienna / Claude brand */
+  --accent:      #d97b50;
+  --accent-h:    #ea9468;
+  --accent-soft: rgba(217, 123, 80, 0.12);
+  --accent-glow: rgba(217, 123, 80, 0.25);
 
   /* Semantic */
   --success:     #10b981;
@@ -40,6 +40,36 @@
   --shadow-sm:   0 1px 3px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.3);
   --shadow-md:   0 4px 12px rgba(0,0,0,0.5), 0 2px 4px rgba(0,0,0,0.3);
   --shadow-card: 0 0 0 1px var(--border), 0 4px 24px rgba(0,0,0,0.4);
+}
+
+/* ── Light mode ───────────────────────────────────────────────────────────── */
+[data-theme="light"] {
+  --bg:          #faf8f5;
+  --surface:     #ffffff;
+  --surface2:    #f5f1eb;
+  --surface3:    #ede8e0;
+  --border:      #ddd7ce;
+  --border-hi:   #ccc4b8;
+
+  --text:        #1a1614;
+  --text-muted:  #6b5e52;
+  --text-dim:    #a89888;
+
+  --accent:      #c06030;
+  --accent-h:    #a04f25;
+  --accent-soft: rgba(192, 96, 48, 0.08);
+  --accent-glow: rgba(192, 96, 48, 0.15);
+
+  --success:     #0d9e6e;
+  --success-soft:rgba(13, 158, 110, 0.10);
+  --warning:     #b87500;
+  --warning-soft:rgba(184, 117, 0, 0.10);
+  --danger:      #dc2626;
+  --danger-soft: rgba(220, 38, 38, 0.10);
+
+  --shadow-sm:   0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md:   0 4px 12px rgba(0,0,0,0.09), 0 2px 4px rgba(0,0,0,0.05);
+  --shadow-card: 0 0 0 1px var(--border), 0 4px 24px rgba(0,0,0,0.07);
 }
 
 /* ── Base ─────────────────────────────────────────────────────────────────── */
@@ -521,7 +551,7 @@ html, body, #root {
   background: var(--accent-soft);
   padding: 2px 10px;
   border-radius: 4px;
-  border: 1px solid rgba(99,102,241,0.2);
+  border: 1px solid rgba(217,123,80,0.2);
 }
 
 /* ── Output box ───────────────────────────────────────────────────────────── */
@@ -670,7 +700,7 @@ html, body, #root {
 .model-tag-active {
   background: var(--accent-soft);
   color: var(--accent-h);
-  border-color: rgba(99,102,241,0.3);
+  border-color: rgba(217,123,80,0.3);
 }
 
 /* ── Text input ───────────────────────────────────────────────────────────── */
@@ -764,7 +794,7 @@ html, body, #root {
   min-height: 100vh;
   padding: 40px 24px;
   gap: 20px;
-  background: radial-gradient(ellipse at 50% 0%, rgba(99,102,241,0.07) 0%, transparent 60%), var(--bg);
+  background: radial-gradient(ellipse at 50% 0%, rgba(217,123,80,0.07) 0%, transparent 60%), var(--bg);
 }
 
 .onboarding-progress {
@@ -1296,8 +1326,8 @@ html, body, #root {
   width: 100%;
   margin-top: 14px;
   padding: 12px 14px;
-  background: rgba(99, 102, 241, 0.06);
-  border: 1px solid rgba(99, 102, 241, 0.2);
+  background: rgba(217, 123, 80, 0.06);
+  border: 1px solid rgba(217, 123, 80, 0.2);
   border-radius: var(--radius-sm);
   font-size: 12px;
   color: var(--text-muted);
@@ -1371,7 +1401,7 @@ html, body, #root {
   white-space: nowrap;
   flex-shrink: 0;
 }
-.memory-badge-core    { background: var(--accent-soft); color: var(--accent-h); border: 1px solid rgba(99,102,241,0.25); }
+.memory-badge-core    { background: var(--accent-soft); color: var(--accent-h); border: 1px solid rgba(217,123,80,0.25); }
 .memory-badge-brain   { background: var(--warning-soft); color: var(--warning); border: 1px solid rgba(245,158,11,0.25); }
 .memory-badge-scout   { background: var(--success-soft); color: var(--success); border: 1px solid rgba(16,185,129,0.25); }
 .memory-badge-pulse   { background: rgba(59,130,246,0.12); color: #60a5fa; border: 1px solid rgba(59,130,246,0.25); }
@@ -1475,7 +1505,7 @@ html, body, #root {
 .agent-tab-active {
   background: var(--accent-soft);
   color: var(--accent-h);
-  border-color: rgba(99,102,241,0.3);
+  border-color: rgba(217,123,80,0.3);
 }
 
 /* ── Project-agent connection list (Settings page) ────────────────────────── */
@@ -1650,7 +1680,7 @@ html, body, #root {
 .sdlc-btn-active {
   background: var(--accent-soft);
   color: var(--accent-h);
-  border-color: rgba(99,102,241,0.4);
+  border-color: rgba(217,123,80,0.4);
   font-weight: 600;
 }
 
@@ -1751,7 +1781,7 @@ html, body, #root {
 
 .about-label { font-size: 12.5px; color: var(--text-muted); }
 .about-value { font-size: 12.5px; color: var(--text); font-weight: 500; }
-.about-value a { color: var(--accent-h); text-decoration: none; cursor: pointer; border-bottom: 1px solid rgba(129, 140, 248, 0.3); }
+.about-value a { color: var(--accent-h); text-decoration: none; cursor: pointer; border-bottom: 1px solid rgba(217,123,80,0.3); }
 .about-value a:hover { border-bottom: 1px solid var(--accent-h); }
 
 /* ── Diagnostic cards ─────────────────────────────────────────────────────── */
@@ -1890,7 +1920,7 @@ html, body, #root {
   font-weight: 500;
   padding: 6px 12px;
   border-radius: 99px;
-  border: 1px solid rgba(129, 140, 248, 0.3);
+  border: 1px solid rgba(217,123,80,0.3);
 }
 
 .about-footer {
@@ -1902,7 +1932,7 @@ html, body, #root {
 .about-footer a {
   color: var(--accent-h);
   text-decoration: none;
-  border-bottom: 1px solid rgba(129, 140, 248, 0.3);
+  border-bottom: 1px solid rgba(217,123,80,0.3);
 }
 
 .about-footer a:hover {
@@ -2585,7 +2615,7 @@ html, body, #root {
 .chat-bubble-user {
   align-self: flex-end;
   background: var(--accent-soft);
-  border: 1px solid rgba(99,102,241,0.25);
+  border: 1px solid rgba(217,123,80,0.25);
   color: var(--text);
 }
 
@@ -3299,4 +3329,265 @@ html, body, #root {
   font-size: 13px;
   color: var(--text-muted);
   margin-top: 6px;
+}
+
+/* ── Page tabs ────────────────────────────────────────────────────────────── */
+.page-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 28px;
+}
+
+.page-tab {
+  padding: 9px 18px;
+  font-size: 13.5px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color 0.13s, border-color 0.13s;
+  white-space: nowrap;
+}
+
+.page-tab:hover { color: var(--text); }
+
+.page-tab-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+/* ── Theme toggle button ──────────────────────────────────────────────────── */
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  flex-shrink: 0;
+}
+
+.theme-toggle:hover {
+  background: var(--surface2);
+  color: var(--text-muted);
+  border-color: var(--border-hi);
+}
+
+/* ── Sidebar footer row ───────────────────────────────────────────────────── */
+.sidebar-footer {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-left: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sidebar-version {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* ── Home page hero cards ─────────────────────────────────────────────────── */
+.home-value-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 32px;
+}
+
+@media (max-width: 760px) {
+  .home-value-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+.home-value-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  position: relative;
+  overflow: hidden;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.home-value-card:hover {
+  border-color: var(--border-hi);
+  box-shadow: var(--shadow-sm);
+}
+
+.home-value-accent {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+}
+
+.home-value-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.home-value-number {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--text);
+  letter-spacing: -0.8px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.home-value-sub {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+/* ── Home service health row ──────────────────────────────────────────────── */
+.home-health-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+}
+
+.home-health-services {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1;
+  flex-wrap: wrap;
+}
+
+.home-health-svc {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+}
+
+.home-health-svc-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ── Home project strip ───────────────────────────────────────────────────── */
+.home-project-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.home-project-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  transition: border-color 0.13s;
+}
+
+.home-project-row:hover { border-color: var(--border-hi); }
+
+.home-project-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.home-project-meta {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+/* ── Loading placeholder ──────────────────────────────────────────────────── */
+.skeleton {
+  background: var(--surface2);
+  border-radius: 4px;
+  animation: skeleton-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+
+/* ── Memory overview compact ──────────────────────────────────────────────── */
+.memory-overview-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 32px;
+}
+
+.memory-overview-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.memory-overview-icon { opacity: 0.7; }
+.memory-overview-value { font-size: 20px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; letter-spacing: -0.4px; }
+.memory-overview-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-dim); }
+
+/* ── Light mode overrides for onboarding ─────────────────────────────────── */
+[data-theme="light"] .onboarding-container {
+  background: radial-gradient(ellipse at 50% 0%, rgba(192,96,48,0.06) 0%, transparent 60%), var(--bg);
+}
+
+[data-theme="light"] .progress-dot.active { background: var(--accent); }
+[data-theme="light"] .progress-dot.done   { background: var(--success); }
+
+/* ── Light mode status strip ──────────────────────────────────────────────── */
+[data-theme="light"] .status-strip {
+  background: var(--surface);
+  border-top-color: var(--border);
+}
+
+/* ── Light mode sidebar ───────────────────────────────────────────────────── */
+[data-theme="light"] .sidebar {
+  background: var(--surface);
+  border-right-color: var(--border);
+}
+
+[data-theme="light"] .sidebar::before {
+  background: linear-gradient(90deg, transparent, rgba(192,96,48,0.15), transparent);
 }
