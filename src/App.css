@@ -3,24 +3,27 @@
 
 /* ── Design tokens ────────────────────────────────────────────────────────── */
 :root {
-  /* Base — warm dark (Claude-inspired) */
-  --bg:          #0f0d0c;
-  --surface:     #171412;
-  --surface2:    #1f1b18;
-  --surface3:    #27221e;
-  --border:      #352e27;
-  --border-hi:   #463d34;
+  /* Base — Claude desktop exact dark palette
+     Sampled from Claude Code app:
+     sidebar = #1a1917, main bg = #1f1d1a, cards = #262320, elevated = #2c2925
+  */
+  --bg:          #1a1917;   /* sidebar / page shell */
+  --surface:     #1f1d1a;   /* main content area */
+  --surface2:    #262320;   /* cards, sections */
+  --surface3:    #2d2a26;   /* most elevated / modals */
+  --border:      #38322b;   /* default border */
+  --border-hi:   #4a4239;   /* hover / focus border */
 
-  /* Text — warm cream */
-  --text:        #f0e8df;
-  --text-muted:  #9c8c7e;
-  --text-dim:    #5c5048;
+  /* Text — warm off-white, exactly Claude's tone */
+  --text:        #ede8e0;
+  --text-muted:  #9c8b7c;
+  --text-dim:    #5e5248;
 
-  /* Accent — warm sienna / Claude brand */
-  --accent:      #d97b50;
-  --accent-h:    #ea9468;
-  --accent-soft: rgba(217, 123, 80, 0.12);
-  --accent-glow: rgba(217, 123, 80, 0.25);
+  /* Accent — Claude brand sienna/amber */
+  --accent:      #da7756;
+  --accent-h:    #ed9a77;
+  --accent-soft: rgba(218, 119, 86, 0.13);
+  --accent-glow: rgba(218, 119, 86, 0.26);
 
   /* Semantic */
   --success:     #10b981;
@@ -36,10 +39,10 @@
   --radius-lg:   14px;
   --sidebar-w:   216px;
 
-  /* Shadows */
-  --shadow-sm:   0 1px 3px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.3);
-  --shadow-md:   0 4px 12px rgba(0,0,0,0.5), 0 2px 4px rgba(0,0,0,0.3);
-  --shadow-card: 0 0 0 1px var(--border), 0 4px 24px rgba(0,0,0,0.4);
+  /* Shadows — tuned for lighter dark background */
+  --shadow-sm:   0 1px 3px rgba(0,0,0,0.35), 0 1px 2px rgba(0,0,0,0.25);
+  --shadow-md:   0 4px 12px rgba(0,0,0,0.45), 0 2px 4px rgba(0,0,0,0.25);
+  --shadow-card: 0 0 0 1px var(--border), 0 4px 24px rgba(0,0,0,0.35);
 }
 
 /* ── Light mode ───────────────────────────────────────────────────────────── */
@@ -101,7 +104,7 @@ html, body, #root {
 /* ── Sidebar ──────────────────────────────────────────────────────────────── */
 .sidebar {
   width: var(--sidebar-w);
-  background: var(--surface);
+  background: var(--bg);          /* darker than main — matches Claude layout */
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -205,7 +208,7 @@ html, body, #root {
   flex: 1;
   overflow-y: auto;
   padding: 36px 40px;
-  background: var(--bg);
+  background: var(--surface);    /* slightly lighter than sidebar — Claude style */
 }
 
 /* ── Page ─────────────────────────────────────────────────────────────────── */
@@ -3584,7 +3587,7 @@ html, body, #root {
 
 /* ── Light mode sidebar ───────────────────────────────────────────────────── */
 [data-theme="light"] .sidebar {
-  background: var(--surface);
+  background: var(--surface2);   /* slightly darker panel in light mode */
   border-right-color: var(--border);
 }
 
