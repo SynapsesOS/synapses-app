@@ -134,6 +134,26 @@ async fn run_synapses_cmd(args: Vec<String>) -> Result<String, String> {
     }
 }
 
+/// Pre-registers a project with the daemon so that the first MCP client
+/// connection succeeds immediately (no lazy-init delay). Fire-and-forget:
+/// returns as soon as the request is sent; initialization continues in the
+/// daemon background. Safe to call multiple times — idempotent.
+#[tauri::command]
+async fn preregister_project(path: String) {
+    tokio::spawn(async move {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(120))
+            .build()
+            .unwrap_or_default();
+        let body = serde_json::json!({ "path": path });
+        let _ = client
+            .post("http://127.0.0.1:11435/api/admin/projects")
+            .json(&body)
+            .send()
+            .await;
+    });
+}
+
 /// Returns the running daemon's version (from /api/admin/health) and the
 /// installed binary version (from `synapses version`), plus a mismatch flag.
 /// The frontend calls this on startup to detect a stale daemon (IMP-EVAL-1).
@@ -1353,6 +1373,7 @@ pub fn run() {
             write_mcp_config,
             check_mcp_config,
             detect_installed_agents,
+            preregister_project,
             // Install & update
             register_launch_agent,
             check_ollama,

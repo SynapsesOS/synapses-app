@@ -12,6 +12,7 @@ interface IndexingProgress {
   files_done: number;
   files_total: number;
   pct: number;
+  label?: string;
 }
 
 interface Props {
@@ -57,6 +58,17 @@ export function Onboarding({ onComplete }: Props) {
   const [indexOutput, setIndexOutput] = useState("");
   const [indexProgress, setIndexProgress] = useState<IndexingProgress | null>(null);
   const indexPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const indexStartRef = useRef<number | null>(null);
+  const [elapsedSecs, setElapsedSecs] = useState(0);
+
+  useEffect(() => {
+    if (!indexing) { setElapsedSecs(0); return; }
+    const id = setInterval(() => {
+      if (indexStartRef.current != null)
+        setElapsedSecs(Math.floor((Date.now() - indexStartRef.current) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [indexing]);
 
   // Step 2 — Ollama / Brain
   const [ollamaStatus, setOllamaStatus] = useState<"checking" | "ok" | "missing">("checking");
@@ -162,6 +174,8 @@ export function Onboarding({ onComplete }: Props) {
     setIndexing(true);
     setIndexOutput("");
     setIndexProgress(null);
+    indexStartRef.current = Date.now();
+    setElapsedSecs(0);
 
     // Poll indexing_progress from the daemon every 500ms while indexing.
     indexPollRef.current = setInterval(async () => {
@@ -175,6 +189,8 @@ export function Onboarding({ onComplete }: Props) {
       const out = await invoke<string>("run_synapses_cmd", { args: ["index", "--path", selected] });
       setIndexedPath(selected);
       setIndexOutput(out || "Indexed successfully.");
+      // Pre-register with the daemon so the first MCP connection is instant.
+      invoke("preregister_project", { path: selected }).catch(() => {});
     } catch (e) {
       setIndexOutput(`Error: ${e}`);
     } finally {
@@ -238,12 +254,14 @@ export function Onboarding({ onComplete }: Props) {
             <div className="index-progress-wrap">
               <div className="index-progress-bar-track">
                 <div
-                  className="index-progress-bar-fill"
+                  className={`index-progress-bar-fill${indexProgress?.label ? " is-resolving" : ""}`}
                   style={{ width: `${indexProgress?.pct ?? 0}%` }}
                 />
               </div>
               <div className="index-progress-label">
-                {indexProgress && indexProgress.files_total > 0
+                {indexProgress?.label
+                  ? `${indexProgress.label} · ${elapsedSecs}s`
+                  : indexProgress && indexProgress.files_total > 0
                   ? `${indexProgress.files_done.toLocaleString()} / ${indexProgress.files_total.toLocaleString()} files · ${indexProgress.pct}%`
                   : "Building file list…"}
               </div>

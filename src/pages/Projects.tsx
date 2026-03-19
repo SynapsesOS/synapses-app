@@ -17,6 +17,7 @@ interface IndexingProgress {
   files_done: number;
   files_total: number;
   pct: number;
+  label?: string;
 }
 
 const SDLC_PHASES = ["development", "testing", "review", "production"] as const;
@@ -61,6 +62,17 @@ export function Projects() {
   const [sdlcPhases, setSdlcPhases] = useState<Record<string, SdlcPhase>>({});
   const [indexProgress, setIndexProgress] = useState<IndexingProgress | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const indexStartRef = useRef<number | null>(null);
+  const [elapsedSecs, setElapsedSecs] = useState(0);
+
+  useEffect(() => {
+    if (!indexingPath) { setElapsedSecs(0); return; }
+    const id = setInterval(() => {
+      if (indexStartRef.current != null)
+        setElapsedSecs(Math.floor((Date.now() - indexStartRef.current) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [indexingPath]);
 
   // Search tab state
   const [activeTab, setActiveTab] = useState<"projects" | "search">("projects");
@@ -132,6 +144,8 @@ export function Projects() {
   async function doIndex(path: string) {
     setIndexingPath(path);
     setIndexProgress(null);
+    indexStartRef.current = Date.now();
+    setElapsedSecs(0);
     setIndexOutput((o) => ({ ...o, [path]: "" }));
 
     pollRef.current = setInterval(async () => {
@@ -145,6 +159,8 @@ export function Projects() {
       const out = await invoke<string>("run_synapses_cmd", { args: ["index", "--path", path] });
       setIndexOutput((o) => ({ ...o, [path]: out || "Indexed successfully." }));
       addToast("success", `${path.split("/").pop()} indexed successfully`);
+      // Pre-register with the daemon so the first MCP connection is instant.
+      invoke("preregister_project", { path }).catch(() => {});
       await loadProjects();
     } catch (e) {
       setIndexOutput((o) => ({ ...o, [path]: String(e) }));
@@ -304,7 +320,7 @@ export function Projects() {
                 </span>
               </div>
               <div className="project-path">{indexingPath}</div>
-              <IndexProgressBar progress={indexProgress} />
+              <IndexProgressBar progress={indexProgress} elapsed={elapsedSecs} />
             </div>
           </div>
         </div>
@@ -353,7 +369,7 @@ export function Projects() {
                     </div>
                     <div className="project-path">{p.path}</div>
                     {isIndexing
-                      ? <IndexProgressBar progress={indexProgress} />
+                      ? <IndexProgressBar progress={indexProgress} elapsed={elapsedSecs} />
                       : (
                         <div className="project-meta-row">
                           {p.nodes != null && (
@@ -433,15 +449,18 @@ export function Projects() {
   );
 }
 
-function IndexProgressBar({ progress }: { progress: IndexingProgress | null }) {
+function IndexProgressBar({ progress, elapsed }: { progress: IndexingProgress | null; elapsed: number }) {
   const pct = progress?.pct ?? 0;
-  const label = progress && progress.files_total > 0
+  const isResolving = !!progress?.label;
+  const label = isResolving
+    ? `${progress!.label} · ${elapsed}s`
+    : progress && progress.files_total > 0
     ? `${progress.files_done.toLocaleString()} / ${progress.files_total.toLocaleString()} files · ${pct}%`
     : "Building file list…";
   return (
     <div className="index-progress-wrap">
       <div className="index-progress-bar-track">
-        <div className="index-progress-bar-fill" style={{ width: `${pct}%` }} />
+        <div className={`index-progress-bar-fill${isResolving ? " is-resolving" : ""}`} style={{ width: `${pct}%` }} />
       </div>
       <div className="index-progress-label">{label}</div>
     </div>

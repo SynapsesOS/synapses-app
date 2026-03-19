@@ -5,6 +5,7 @@ import { useServices } from "../hooks/useServices";
 import {
   FolderOpen, Zap, DollarSign, Activity, BarChart2,
   PlusCircle, Plug, AlertCircle, RefreshCw, ChevronRight,
+  Square, Play,
 } from "lucide-react";
 
 const PULSE_URL = "http://127.0.0.1:11435/api/admin/pulse/summary";
@@ -64,7 +65,8 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 export function Dashboard() {
-  const { services, startupError } = useServices();
+  const { services, restart, stop, enable, startupError } = useServices();
+  const [restarting, setRestarting] = useState<Record<string, boolean>>({});
   const [projects,  setProjects]  = useState<Project[]>([]);
   const [summary,   setSummary]   = useState<PulseSummary | null>(null);
   const [agents,    setAgents]    = useState<AgentStat[]>([]);
@@ -162,27 +164,73 @@ export function Dashboard() {
         </div>
       </section>
 
-      {/* ── System health compact ─────────────────────────────────────────── */}
+      {/* ── System health ──────────────────────────────────────────────────── */}
       {services.length > 0 && (
         <section className="dash-section">
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
             <h2 className="section-title" style={{ margin: 0 }}>Services</h2>
-            <span className="section-meta" style={{ color: healthy === total ? "var(--success)" : "var(--warning)" }}>
-              {healthy}/{total} healthy
-            </span>
-          </div>
-          <div className="home-health-row">
-            <div className="home-health-services">
-              {services.map((s) => (
-                <div key={s.name} className="home-health-svc">
-                  <div className="home-health-svc-dot" style={{ background: STATUS_COLOR[s.status] ?? "var(--text-dim)" }} />
-                  <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "capitalize" }}>{s.name}</span>
-                </div>
-              ))}
-            </div>
-            <Link to="/settings" style={{ fontSize: 11.5, color: "var(--text-dim)", textDecoration: "none", display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
+            <Link to="/settings" className="section-link">
               Manage <ChevronRight size={12} />
             </Link>
+          </div>
+          <div className="home-service-cards">
+            {services.map((s) => {
+              const dot = STATUS_COLOR[s.status] ?? "var(--text-dim)";
+              const isRestarting = restarting[s.name];
+              return (
+                <div key={s.name} className="home-service-card">
+                  <div className="home-service-card-left">
+                    <div
+                      className={`home-service-dot ${s.status === "healthy" ? "pulse" : ""}`}
+                      style={{ background: dot }}
+                    />
+                    <div>
+                      <div className="home-service-name">{s.name}</div>
+                      <div className="home-service-status" style={{ color: dot }}>
+                        {s.status === "starting" ? "Starting…" : s.status.charAt(0).toUpperCase() + s.status.slice(1)}
+                        {s.restarts_total > 0 && (
+                          <span className="home-service-restarts"> · auto-restarted {s.restarts_total}×</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="home-service-card-actions">
+                    {s.status !== "disabled" && (
+                      <button
+                        className="icon-btn"
+                        title="Restart daemon"
+                        disabled={isRestarting}
+                        onClick={async () => {
+                          setRestarting((prev) => ({ ...prev, [s.name]: true }));
+                          try { await restart(s.name); } finally {
+                            setRestarting((prev) => ({ ...prev, [s.name]: false }));
+                          }
+                        }}
+                      >
+                        <RefreshCw size={14} className={isRestarting ? "spin" : ""} />
+                      </button>
+                    )}
+                    {s.status === "disabled" ? (
+                      <button
+                        className="icon-btn"
+                        title="Enable"
+                        onClick={() => enable(s.name)}
+                      >
+                        <Play size={14} />
+                      </button>
+                    ) : (
+                      <button
+                        className="icon-btn icon-btn-danger"
+                        title="Stop"
+                        onClick={() => stop(s.name)}
+                      >
+                        <Square size={14} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </section>
       )}
