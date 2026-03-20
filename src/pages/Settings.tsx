@@ -1,6 +1,9 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Copy, CheckCircle, FolderOpen, RefreshCw, Plug, AlertCircle } from "lucide-react";
+import {
+  Copy, CheckCircle, FolderOpen, RefreshCw, Plug, AlertCircle,
+  ChevronDown, ChevronRight, Code2, Shield, Database,
+} from "lucide-react";
 import { useToast } from "../context/ToastContext";
 import { useServices } from "../hooks/useServices";
 
@@ -11,16 +14,15 @@ interface Project {
   files?: number;
   scale?: string;
   last_indexed?: string;
-  status?: string;
 }
 
 const AGENTS = [
-  { id: "claude",      label: "Claude Code",  configFile: ".mcp.json" },
-  { id: "cursor",      label: "Cursor",        configFile: ".cursor/mcp.json" },
-  { id: "windsurf",    label: "Windsurf",      configFile: ".windsurf/mcp_config.json" },
-  { id: "zed",         label: "Zed",           configFile: ".zed/settings.json" },
-  { id: "vscode",      label: "VS Code",       configFile: ".vscode/mcp.json" },
-  { id: "antigravity", label: "Antigravity",   configFile: ".agent/mcp.json" },
+  { id: "claude",      label: "Claude Code",  configFile: ".mcp.json",                   emoji: "🤖" },
+  { id: "cursor",      label: "Cursor",        configFile: ".cursor/mcp.json",            emoji: "⚡" },
+  { id: "windsurf",    label: "Windsurf",      configFile: ".windsurf/mcp_config.json",   emoji: "🌊" },
+  { id: "zed",         label: "Zed",           configFile: ".zed/settings.json",          emoji: "⚡" },
+  { id: "vscode",      label: "VS Code",       configFile: ".vscode/mcp.json",            emoji: "💙" },
+  { id: "antigravity", label: "Antigravity",   configFile: ".agent/mcp.json",             emoji: "🔮" },
 ];
 
 const MANUAL_SNIPPET = JSON.stringify(
@@ -31,41 +33,35 @@ const MANUAL_SNIPPET = JSON.stringify(
 export function Settings() {
   const { addToast } = useToast();
   const { services } = useServices();
-  const [dataDir, setDataDir] = useState("");
-  const [copied, setCopied] = useState<string | null>(null);
-  const [logLines, setLogLines] = useState<string[]>([]);
-  const [logLoading, setLogLoading] = useState(false);
+  const [dataDir, setDataDir]         = useState("");
+  const [copied, setCopied]           = useState<string | null>(null);
+  const [logLines, setLogLines]       = useState<string[]>([]);
+  const [logLoading, setLogLoading]   = useState(false);
+  const [advanced, setAdvanced]       = useState(false);
 
-  // Agent connection state
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [projects, setProjects]       = useState<Project[]>([]);
   const [detectedAgents, setDetectedAgents] = useState<Set<string>>(new Set());
-  // connections[projectPath][agentId] = true if MCP config present
   const [connections, setConnections] = useState<Record<string, Record<string, boolean>>>({});
-  const [connecting, setConnecting] = useState<string | null>(null); // "projectPath::agentId"
+  const [connecting, setConnecting]   = useState<string | null>(null);
 
-  const daemonSvc = services.find((s) => s.name === "synapses");
-  const daemonRunning =
-    services.length === 0
-      ? null
-      : daemonSvc?.status === "healthy" || daemonSvc?.status === "degraded" || daemonSvc?.status === "starting"
-      ? true
-      : false;
+  const daemonSvc     = services.find((s) => s.name === "synapses");
+  const daemonRunning = services.length === 0
+    ? null
+    : daemonSvc?.status === "healthy" || daemonSvc?.status === "degraded" || daemonSvc?.status === "starting"
+    ? true : false;
 
   useEffect(() => {
     invoke<string>("get_synapses_data_dir").then(setDataDir).catch(() => {});
 
-    // Load indexed projects
     invoke<string>("run_synapses_cmd", { args: ["list", "--json"] })
       .then((raw) => setProjects(JSON.parse(raw) as Project[]))
       .catch(() => setProjects([]));
 
-    // Detect installed agents
     invoke<string[]>("detect_installed_agents")
       .then((ids) => setDetectedAgents(new Set(ids)))
       .catch(() => setDetectedAgents(new Set()));
   }, []);
 
-  // Once projects load, check existing connections
   useEffect(() => {
     if (projects.length === 0) return;
     const checks = projects.flatMap((p) =>
@@ -95,12 +91,10 @@ export function Settings() {
         [projectPath]: { ...prev[projectPath], [agentId]: true },
       }));
       const label = AGENTS.find((a) => a.id === agentId)?.label ?? agentId;
-      addToast("success", `${label} connected — restart your agent to apply`);
+      addToast("success", `${label} connected — restart your editor to apply`);
     } catch (e) {
       addToast("error", `Failed: ${e}`);
-    } finally {
-      setConnecting(null);
-    }
+    } finally { setConnecting(null); }
   }
 
   async function copyText(text: string, key: string) {
@@ -114,19 +108,21 @@ export function Settings() {
     setLogLoading(true);
     try {
       const lines = await invoke<string[]>("get_log_lines", { n: 100 });
-      if (lines.length === 0) {
-        addToast("info", "No logs found yet — daemon may have just started");
-        setLogLines(["[No logs available]"]);
-      } else {
-        setLogLines(lines);
-      }
+      setLogLines(lines.length === 0 ? ["[No logs available]"] : lines);
     } catch (e) {
       addToast("error", `Failed to load logs: ${e}`);
-      setLogLines([]);
-    } finally {
-      setLogLoading(false);
-    }
+    } finally { setLogLoading(false); }
   }
+
+  // Aggregate: which agents are connected to ANY project?
+  const anyConnected = (agentId: string) =>
+    projects.some((p) => connections[p.path]?.[agentId] === true);
+
+  // Is agent detected on this machine?
+  const isInstalled = (agentId: string) => detectedAgents.has(agentId);
+
+  // For connect: use first project or let user pick — defaults to first indexed project
+  const defaultProject = projects[0]?.path ?? "";
 
   return (
     <div className="page">
@@ -134,208 +130,225 @@ export function Settings() {
         <h1 className="page-title">Settings</h1>
       </div>
 
-      {/* Agent integration — project-scoped */}
+      {/* ── Connect your editor ──────────────────────────────────────────── */}
       <section className="settings-section">
-        <h2 className="section-title">Connect AI Agents</h2>
+        <h2 className="section-title">Connect your editor</h2>
         <p className="section-desc">
-          Writes an MCP config into each project's directory — only indexed projects receive Synapses context.
-          Non-indexed projects are never touched.
+          One click to add Synapses to your AI coding assistant. Restart your editor after connecting.
         </p>
 
         {daemonRunning === false && (
-          <div className="offline-banner" style={{ marginBottom: 12 }}>
+          <div className="offline-banner" style={{ marginBottom: 16 }}>
             <AlertCircle size={14} />
-            <span>Daemon is offline — start it from the Dashboard before connecting your agent.</span>
+            <span>Synapses engine is offline — check the Home page for status.</span>
           </div>
         )}
 
         {projects.length === 0 ? (
-          <p className="settings-hint">No indexed projects yet — add one in the Projects tab first.</p>
+          <div className="settings-hint">
+            Add a project first — go to the Projects tab and index a codebase.
+          </div>
         ) : (
-          <div className="project-agent-list">
-            {projects.map((project) => (
-              <div key={project.path} className="project-agent-row">
-                <div className="project-agent-header">
-                  <div className="project-agent-name">{project.name}</div>
-                  <div className="project-agent-path">{project.path}</div>
-                </div>
-                <div className="agent-chips">
-                  {AGENTS.map((agent) => {
-                    const isConnected = connections[project.path]?.[agent.id] ?? false;
-                    const isInstalled = detectedAgents.has(agent.id);
-                    const key = `${project.path}::${agent.id}`;
-                    const isConnecting = connecting === key;
+          <>
+            <div className="editor-card-grid">
+              {AGENTS.map((agent) => {
+                const connected = anyConnected(agent.id);
+                const installed = isInstalled(agent.id);
+                const isConnecting = projects.some((p) => connecting === `${p.path}::${agent.id}`);
 
-                    return (
-                      <button
-                        key={agent.id}
-                        className={[
-                          "agent-chip",
-                          isConnected ? "agent-chip-connected" : "",
-                          !isInstalled ? "agent-chip-dim" : "",
-                        ].join(" ").trim()}
-                        onClick={() => connectAgent(agent.id, project.path)}
-                        disabled={isConnecting}
-                        title={
-                          !isInstalled
-                            ? `${agent.label} not detected — will write config anyway`
-                            : isConnected
-                            ? `Connected · click to re-apply`
-                            : `Write ${agent.configFile}`
-                        }
-                      >
-                        {isConnecting ? (
-                          <RefreshCw size={11} className="spin" />
-                        ) : isConnected ? (
-                          <CheckCircle size={11} />
-                        ) : (
-                          <Plug size={11} />
-                        )}
-                        {agent.label}
-                      </button>
-                    );
-                  })}
-                </div>
+                return (
+                  <button
+                    key={agent.id}
+                    className={`editor-card ${connected ? "editor-card-connected" : ""} ${!installed ? "editor-card-dim" : ""}`}
+                    onClick={() => !isConnecting && connectAgent(agent.id, defaultProject)}
+                    disabled={isConnecting}
+                    title={
+                      !installed
+                        ? `${agent.label} not detected on this machine`
+                        : connected
+                        ? `Connected — click to re-apply config`
+                        : `Write MCP config for ${agent.label}`
+                    }
+                  >
+                    <div className="editor-card-top">
+                      <span className="editor-card-emoji">{agent.emoji}</span>
+                      <span className="editor-card-label">{agent.label}</span>
+                      {isConnecting ? (
+                        <RefreshCw size={13} className="spin editor-card-status" style={{ color: "var(--text-dim)" }} />
+                      ) : connected ? (
+                        <CheckCircle size={13} className="editor-card-status" style={{ color: "var(--success)" }} />
+                      ) : installed ? (
+                        <Plug size={13} className="editor-card-status" style={{ color: "var(--text-dim)" }} />
+                      ) : null}
+                    </div>
+                    <div className="editor-card-bottom">
+                      {connected
+                        ? <span style={{ color: "var(--success)" }}>Connected</span>
+                        : installed
+                        ? <span>Connect →</span>
+                        : <span style={{ color: "var(--text-dim)" }}>Not detected</span>
+                      }
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {projects.length > 1 && (
+              <p className="settings-hint" style={{ marginTop: 10 }}>
+                Connected to: {projects[0].name}.
+                {" "}To connect other projects, use the per-project controls in Advanced below.
+              </p>
+            )}
+
+            <div style={{ marginTop: 16 }}>
+              <p className="settings-hint" style={{ marginBottom: 8 }}>
+                Using a different editor? Copy this snippet into your MCP config:
+              </p>
+              <div className="code-block">
+                <pre>{MANUAL_SNIPPET}</pre>
+                <button className="copy-btn" onClick={() => copyText(MANUAL_SNIPPET, "mcp")}>
+                  {copied === "mcp" ? <CheckCircle size={13} /> : <Copy size={13} />}
+                  {copied === "mcp" ? "Copied!" : "Copy"}
+                </button>
               </div>
-            ))}
-          </div>
+            </div>
+          </>
         )}
-
-        {/* Manual / generic copy-paste */}
-        <div style={{ marginTop: 20 }}>
-          <p className="settings-hint" style={{ marginBottom: 8 }}>
-            Other editors — copy the snippet and add it to your agent's MCP config manually:
-          </p>
-          <div className="code-block">
-            <pre>{MANUAL_SNIPPET}</pre>
-            <button className="copy-btn" onClick={() => copyText(MANUAL_SNIPPET, "mcp")}>
-              {copied === "mcp" ? <CheckCircle size={14} /> : <Copy size={14} />}
-              {copied === "mcp" ? "Copied!" : "Copy"}
-            </button>
-          </div>
-        </div>
       </section>
 
-      {/* Data directory */}
+      {/* ── Privacy & Data ───────────────────────────────────────────────── */}
       <section className="settings-section">
-        <h2 className="section-title">Data Directory</h2>
-        <div className="code-block">
-          <pre>{dataDir || "~/.synapses"}</pre>
-          <button className="copy-btn" onClick={() => copyText(dataDir, "dir")}>
-            {copied === "dir" ? <CheckCircle size={14} /> : <Copy size={14} />}
-            {copied === "dir" ? "Copied!" : "Copy"}
-          </button>
+        <h2 className="section-title">Privacy & Data</h2>
+        <div className="privacy-row">
+          <div className="privacy-row-info">
+            <Shield size={14} style={{ color: "var(--success)", flexShrink: 0 }} />
+            <div>
+              <div className="privacy-row-label">All data stays on your machine</div>
+              <div className="privacy-row-desc">No cloud sync, no telemetry, no account required</div>
+            </div>
+          </div>
         </div>
-        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <div className="privacy-actions">
           <button
             className="btn-secondary btn-sm"
             onClick={() => invoke("open_data_dir").catch(() => addToast("error", "Could not open directory"))}
           >
-            <FolderOpen size={13} /> Open in Finder
+            <FolderOpen size={13} /> Open data folder
           </button>
+          {dataDir && (
+            <button className="btn-secondary btn-sm" onClick={() => copyText(dataDir, "dir")}>
+              {copied === "dir" ? <CheckCircle size={13} /> : <Copy size={13} />}
+              Copy path
+            </button>
+          )}
         </div>
       </section>
 
-      {/* System Status */}
-      <section className="settings-section">
-        <h2 className="section-title">System Status</h2>
-        <div className="diagnostic-cards">
-          <div className="diagnostic-card">
-            <div className="diagnostic-icon">🖥️</div>
-            <div className="diagnostic-content">
-              <div className="diagnostic-title">Daemon</div>
-              <div className="diagnostic-status">
-                {daemonRunning === null ? "Checking…" : daemonRunning ? "🟢 Running" : "🔴 Offline"}
-              </div>
-              <div className="diagnostic-detail">127.0.0.1:11435</div>
-            </div>
-          </div>
-          <div className="diagnostic-card">
-            <div className="diagnostic-icon">📊</div>
-            <div className="diagnostic-content">
-              <div className="diagnostic-title">Indexed Projects</div>
-              <div className="diagnostic-status">{projects.length} project{projects.length !== 1 ? "s" : ""}</div>
-              <div className="diagnostic-detail">Stored in synapses.db</div>
-            </div>
-          </div>
-          <div className="diagnostic-card">
-            <div className="diagnostic-icon">🔌</div>
-            <div className="diagnostic-content">
-              <div className="diagnostic-title">MCP Protocol</div>
-              <div className="diagnostic-status">HTTP</div>
-              <div className="diagnostic-detail">/mcp?project=&lt;path&gt;</div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Log viewer */}
-      <section className="settings-section">
-        <h2 className="section-title">Daemon Logs</h2>
-        <p className="section-desc">View recent output from the Synapses daemon process.</p>
-        <button className="btn-secondary btn-sm" onClick={loadLogs} disabled={logLoading}>
-          {logLoading ? <><RefreshCw size={12} className="spin" /> Loading…</> : "View last 100 lines"}
+      {/* ── Advanced ─────────────────────────────────────────────────────── */}
+      <div className="advanced-section">
+        <button className="advanced-toggle" onClick={() => setAdvanced((v) => !v)}>
+          {advanced ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          Advanced
+          <span className="advanced-toggle-hint">per-project connections, logs, diagnostics</span>
         </button>
-        {logLines.length > 0 && (
-          <div className="output-box" style={{ marginTop: 10 }}>
-            <pre style={{ maxHeight: 320 }}>{logLines.join("\n")}</pre>
-            <button className="output-close" onClick={() => setLogLines([])}>×</button>
+
+        {advanced && (
+          <div className="advanced-content">
+
+            {/* Per-project connection matrix */}
+            {projects.length > 1 && (
+              <div className="adv-subsection">
+                <div className="section-title" style={{ marginBottom: 10 }}>Per-project connections</div>
+                <div className="project-agent-list">
+                  {projects.map((project) => (
+                    <div key={project.path} className="project-agent-row">
+                      <div className="project-agent-header">
+                        <div className="project-agent-name">{project.name}</div>
+                        <div className="project-agent-path">{project.path}</div>
+                      </div>
+                      <div className="agent-chips">
+                        {AGENTS.map((agent) => {
+                          const isConnected = connections[project.path]?.[agent.id] ?? false;
+                          const installed   = detectedAgents.has(agent.id);
+                          const key         = `${project.path}::${agent.id}`;
+                          const isConnecting = connecting === key;
+                          return (
+                            <button
+                              key={agent.id}
+                              className={["agent-chip", isConnected ? "agent-chip-connected" : "", !installed ? "agent-chip-dim" : ""].join(" ").trim()}
+                              onClick={() => connectAgent(agent.id, project.path)}
+                              disabled={isConnecting}
+                            >
+                              {isConnecting ? <RefreshCw size={10} className="spin" /> : isConnected ? <CheckCircle size={10} /> : <Plug size={10} />}
+                              {agent.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Diagnostics */}
+            <div className="adv-subsection">
+              <div className="section-title" style={{ marginBottom: 10 }}>Diagnostics</div>
+              <div className="diagnostic-cards">
+                <div className="diagnostic-card">
+                  <Code2 size={15} style={{ color: "var(--text-muted)" }} />
+                  <div className="diagnostic-content">
+                    <div className="diagnostic-title">Engine</div>
+                    <div className="diagnostic-status" style={{ color: daemonRunning ? "var(--success)" : "var(--danger)" }}>
+                      {daemonRunning === null ? "Checking…" : daemonRunning ? "Running" : "Offline"}
+                    </div>
+                    <div className="diagnostic-detail">127.0.0.1:11435</div>
+                  </div>
+                </div>
+                <div className="diagnostic-card">
+                  <Database size={15} style={{ color: "var(--text-muted)" }} />
+                  <div className="diagnostic-content">
+                    <div className="diagnostic-title">Projects</div>
+                    <div className="diagnostic-status">{projects.length} indexed</div>
+                    <div className="diagnostic-detail">Stored locally in SQLite</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Logs */}
+            <div className="adv-subsection">
+              <div className="section-title" style={{ marginBottom: 8 }}>Engine logs</div>
+              <button className="btn-secondary btn-sm" onClick={loadLogs} disabled={logLoading}>
+                {logLoading ? <><RefreshCw size={12} className="spin" /> Loading…</> : "View last 100 lines"}
+              </button>
+              {logLines.length > 0 && (
+                <div className="output-box" style={{ marginTop: 10 }}>
+                  <pre style={{ maxHeight: 280 }}>{logLines.join("\n")}</pre>
+                  <button className="output-close" onClick={() => setLogLines([])}>×</button>
+                </div>
+              )}
+            </div>
           </div>
         )}
-        {logLines.length === 0 && !logLoading && (
-          <p className="settings-hint" style={{ marginTop: 8 }}>
-            Location: <code>{dataDir || "~/.synapses"}/logs/daemon.log</code>
-          </p>
-        )}
-      </section>
+      </div>
 
-      {/* About */}
-      <section className="settings-section">
-        <h2 className="section-title">About Synapses</h2>
-        <div className="about-intro">
-          <div className="about-version">Version 0.2.0</div>
-          <p>Local-first code intelligence for AI agents. Works with your favorite editors via MCP.</p>
+      {/* ── About ────────────────────────────────────────────────────────── */}
+      <section className="settings-section" style={{ marginTop: 32 }}>
+        <h2 className="section-title">About</h2>
+        <div className="about-row">
+          <span className="about-name">Synapses</span>
+          <span className="about-version">v0.3.0</span>
         </div>
-
-        <div className="about-features">
-          <div className="feature-block">
-            <div className="feature-icon">🧠</div>
-            <h3>Code Graph Engine</h3>
-            <p>Indexes all indexed projects into a queryable graph. No remote processing.</p>
-          </div>
-          <div className="feature-block">
-            <div className="feature-icon">🔌</div>
-            <h3>MCP Protocol</h3>
-            <p>Model Context Protocol over HTTP at 127.0.0.1:11435/mcp?project=&lt;path&gt;</p>
-          </div>
-          <div className="feature-block">
-            <div className="feature-icon">🛡️</div>
-            <h3>Privacy First</h3>
-            <p>No cloud upload, no telemetry. All data stays on your machine.</p>
-          </div>
-          <div className="feature-block">
-            <div className="feature-icon">📦</div>
-            <h3>Stack</h3>
-            <p>Daemon (Go) · App (Tauri + React) · Storage (SQLite local)</p>
-          </div>
-        </div>
-
-        <div className="about-agents">
-          <h3 style={{ marginBottom: 12 }}>Supported Editors</h3>
-          <div className="agent-tags">
-            <span className="agent-tag">Claude Code</span>
-            <span className="agent-tag">Cursor</span>
-            <span className="agent-tag">Windsurf</span>
-            <span className="agent-tag">Zed</span>
-            <span className="agent-tag">VS Code</span>
-            <span className="agent-tag">Antigravity</span>
-          </div>
-        </div>
-
-        <div className="about-footer">
-          <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>
-            © 2026 Synapses OS · <a href="#" onClick={(e) => { e.preventDefault(); }}>github.com/itachi-os/synapses</a>
-          </p>
+        <p className="section-desc" style={{ marginTop: 6 }}>
+          Local-first knowledge substrate for AI agents. Graph-based code intelligence,
+          persistent memory, session continuity — all on your machine, no cloud required.
+        </p>
+        <div className="agent-tags" style={{ marginTop: 10 }}>
+          {["Claude Code", "Cursor", "Windsurf", "Zed", "VS Code", "Antigravity"].map((t) => (
+            <span key={t} className="agent-tag">{t}</span>
+          ))}
         </div>
       </section>
     </div>

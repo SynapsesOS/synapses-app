@@ -4,7 +4,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Sidebar } from "./components/Sidebar";
 import { Toasts } from "./components/Toasts";
-import { StatusStrip } from "./components/StatusStrip";
 import { ToastProvider, useToast } from "./context/ToastContext";
 import { Dashboard } from "./pages/Dashboard";
 import { Projects } from "./pages/Projects";
@@ -49,7 +48,6 @@ function AppShell() {
               <Route path="/settings" element={<Settings />} />
             </Routes>
           </main>
-          <StatusStrip />
         </div>
       </div>
       <Toasts />

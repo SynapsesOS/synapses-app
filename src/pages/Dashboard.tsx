@@ -3,8 +3,8 @@ import { Link } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useServices } from "../hooks/useServices";
 import {
-  FolderOpen, Zap, DollarSign, Activity, BarChart2,
-  PlusCircle, Plug, AlertCircle, RefreshCw, ChevronRight,
+  FolderOpen, DollarSign, Clock, CheckSquare, ChevronRight,
+  PlusCircle, Plug, RefreshCw, AlertCircle, Users,
   Square, Play,
 } from "lucide-react";
 
@@ -25,8 +25,8 @@ interface PulseSummary {
   cost_saved_usd?: number;
   total_tool_calls?: number;
   sessions?: number;
-  compression_ratio?: number;
-  savings_pct?: number;
+  tasks_completed?: number;
+  context_deliveries?: number;
 }
 
 interface AgentStat {
@@ -34,26 +34,38 @@ interface AgentStat {
   sessions: number;
   tool_calls: number;
   tokens_saved: number;
+  tasks_completed?: number;
   last_seen?: string;
-}
-
-function fmt(n?: number): string {
-  if (n == null || n === 0) return "0";
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
-  if (n >= 1_000)     return (n / 1_000).toFixed(1) + "K";
-  return n.toLocaleString();
 }
 
 function relTime(iso?: string): string {
   if (!iso) return "";
   try {
     const diff = Date.now() - new Date(iso).getTime();
-    const h = Math.floor(diff / 3_600_000);
-    const d = Math.floor(h / 24);
-    if (d > 0) return `${d}d ago`;
-    if (h > 0) return `${h}h ago`;
-    return "just now";
+    const m = Math.floor(diff / 60_000);
+    if (m < 1) return "just now";
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    return `${Math.floor(h / 24)}d ago`;
   } catch { return ""; }
+}
+
+function agentShortName(id: string): string {
+  if (id.toLowerCase().includes("claude")) return "Claude Code";
+  if (id.toLowerCase().includes("cursor")) return "Cursor";
+  if (id.toLowerCase().includes("windsurf")) return "Windsurf";
+  if (id.toLowerCase().includes("zed")) return "Zed";
+  if (id.toLowerCase().includes("vscode") || id.toLowerCase().includes("vs code")) return "VS Code";
+  // truncate long IDs
+  return id.length > 24 ? id.slice(0, 22) + "…" : id;
+}
+
+function scaleLabel(scale?: string, files?: number): string {
+  if (!scale) return "";
+  const fileStr = files ? ` · ${files.toLocaleString()} files` : "";
+  const label = scale.charAt(0).toUpperCase() + scale.slice(1);
+  return `${label}${fileStr}`;
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -67,6 +79,7 @@ const STATUS_COLOR: Record<string, string> = {
 export function Dashboard() {
   const { services, restart, stop, enable, startupError } = useServices();
   const [restarting, setRestarting] = useState<Record<string, boolean>>({});
+  const [showServices, setShowServices] = useState(false);
   const [projects,  setProjects]  = useState<Project[]>([]);
   const [summary,   setSummary]   = useState<PulseSummary | null>(null);
   const [agents,    setAgents]    = useState<AgentStat[]>([]);
@@ -75,6 +88,8 @@ export function Dashboard() {
 
   const healthy = services.filter((s) => s.status === "healthy").length;
   const total   = services.length;
+  const anyOffline  = services.some((s) => s.status === "offline");
+  const anyDegraded = services.some((s) => s.status === "degraded");
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -84,14 +99,12 @@ export function Dashboard() {
         fetch(`${PULSE_URL}?days=7`, { signal: AbortSignal.timeout(3000) })
           .then((r) => (r.ok ? r.json() : Promise.reject())),
       ]);
-
       if (raw.status === "fulfilled") {
         try { setProjects(JSON.parse(raw.value) as Project[]); } catch { /**/ }
       }
-
       if (pulse.status === "fulfilled") {
         setSummary(pulse.value.summary ?? null);
-        setAgents((pulse.value.agents ?? []).slice(0, 4));
+        setAgents((pulse.value.agents ?? []).slice(0, 6));
         setOffline(false);
       } else {
         setOffline(true);
@@ -103,20 +116,48 @@ export function Dashboard() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  const costStr = summary?.cost_saved_usd != null
+  // Hero status
+  const statusOk   = total > 0 && healthy === total && !offline;
+  const statusHeadline = offline
+    ? "Engine is offline"
+    : anyOffline
+    ? `${total - healthy} service${total - healthy > 1 ? "s" : ""} offline`
+    : anyDegraded
+    ? "Running with issues"
+    : total === 0
+    ? "Starting up…"
+    : "Synapses is running";
+
+  const costStr = summary?.cost_saved_usd != null && summary.cost_saved_usd > 0
     ? `$${summary.cost_saved_usd.toFixed(2)}`
     : offline ? "—" : "—";
 
+  const activeAgents = agents.filter((a) => {
+    if (!a.last_seen) return false;
+    return Date.now() - new Date(a.last_seen).getTime() < 24 * 3600_000;
+  });
+
   return (
-    <div className="page">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Home</h1>
-          <span className="page-subtitle">
-            {total > 0
-              ? `${healthy}/${total} services healthy · ${projects.length} project${projects.length !== 1 ? "s" : ""} indexed`
-              : "Starting up…"}
-          </span>
+    <div className="page dash-page">
+
+      {/* ── Hero status ───────────────────────────────────────────────────── */}
+      <div className="hero-status">
+        <div className="hero-status-left">
+          <button
+            className={`hero-orb ${anyOffline ? "orb-danger" : anyDegraded || offline ? "orb-warning" : statusOk ? "orb-success" : "orb-dim"}`}
+            title="Click to see services"
+            onClick={() => setShowServices((v) => !v)}
+            style={{ cursor: "pointer", border: "none", background: "none", padding: 0 }}
+          />
+          <div>
+            <div className="hero-headline">{statusHeadline}</div>
+            <div className="hero-subline">
+              {projects.length > 0
+                ? `${projects.length} project${projects.length !== 1 ? "s" : ""} indexed`
+                : "No projects yet"}
+              {activeAgents.length > 0 && ` · ${activeAgents.length} agent${activeAgents.length !== 1 ? "s" : ""} active today`}
+            </div>
+          </div>
         </div>
         <button className="btn-ghost" onClick={fetchData} title="Refresh">
           <RefreshCw size={14} className={loading ? "spin" : ""} />
@@ -130,101 +171,59 @@ export function Dashboard() {
         </div>
       )}
 
-      {/* ── Value metrics ────────────────────────────────────────────────── */}
-      <section className="dash-section">
-        <div className="home-value-grid">
-          <HomeCard
-            icon={<Zap size={16} />}
-            accentColor="var(--accent)"
-            label="Tokens Saved (7d)"
-            value={fmt(summary?.tokens_saved)}
-            sub={summary?.savings_pct ? `${summary.savings_pct.toFixed(1)}% of baseline` : "context compressed"}
-          />
-          <HomeCard
-            icon={<DollarSign size={16} />}
-            accentColor="var(--success)"
-            label="Est. Cost Saved"
-            value={costStr}
-            sub="vs uncompressed baseline"
-          />
-          <HomeCard
-            icon={<Activity size={16} />}
-            accentColor="var(--warning)"
-            label="Agent Sessions"
-            value={fmt(summary?.sessions)}
-            sub="in the last 7 days"
-          />
-          <HomeCard
-            icon={<BarChart2 size={16} />}
-            accentColor="var(--text-muted)"
-            label="Tool Calls"
-            value={fmt(summary?.total_tool_calls)}
-            sub={summary?.compression_ratio ? `${summary.compression_ratio.toFixed(1)}× compression` : "MCP tool calls"}
-          />
-        </div>
-      </section>
-
-      {/* ── System health ──────────────────────────────────────────────────── */}
-      {services.length > 0 && (
-        <section className="dash-section">
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-            <h2 className="section-title" style={{ margin: 0 }}>Services</h2>
-            <Link to="/settings" className="section-link">
+      {/* ── Services panel (expandable) ──────────────────────────────────── */}
+      {showServices && services.length > 0 && (
+        <div className="services-panel">
+          <div className="services-panel-header">
+            <span className="services-panel-title">Services</span>
+            <Link to="/settings" className="section-link" onClick={() => setShowServices(false)}>
               Manage <ChevronRight size={12} />
             </Link>
           </div>
-          <div className="home-service-cards">
+          <div className="services-panel-list">
             {services.map((s) => {
               const dot = STATUS_COLOR[s.status] ?? "var(--text-dim)";
               const isRestarting = restarting[s.name];
               return (
-                <div key={s.name} className="home-service-card">
-                  <div className="home-service-card-left">
+                <div key={s.name} className="service-row">
+                  <div className="service-row-left">
                     <div
-                      className={`home-service-dot ${s.status === "healthy" ? "pulse" : ""}`}
-                      style={{ background: dot }}
+                      className={`status-dot ${s.status === "healthy" ? "healthy" : ""}`}
+                      style={s.status !== "healthy" ? { background: dot } : undefined}
                     />
                     <div>
-                      <div className="home-service-name">{s.name}</div>
-                      <div className="home-service-status" style={{ color: dot }}>
+                      <div className="service-name">{s.name}</div>
+                      <div className="service-status-label" style={{ color: dot }}>
                         {s.status === "starting" ? "Starting…" : s.status.charAt(0).toUpperCase() + s.status.slice(1)}
                         {s.restarts_total > 0 && (
-                          <span className="home-service-restarts"> · auto-restarted {s.restarts_total}×</span>
+                          <span className="service-restarts"> · restarted {s.restarts_total}×</span>
                         )}
                       </div>
                     </div>
                   </div>
-                  <div className="home-service-card-actions">
+                  <div className="card-actions">
                     {s.status !== "disabled" && (
                       <button
                         className="icon-btn"
-                        title="Restart daemon"
+                        title="Restart"
                         disabled={isRestarting}
                         onClick={async () => {
-                          setRestarting((prev) => ({ ...prev, [s.name]: true }));
+                          setRestarting((p) => ({ ...p, [s.name]: true }));
                           try { await restart(s.name); } finally {
-                            setRestarting((prev) => ({ ...prev, [s.name]: false }));
+                            setRestarting((p) => ({ ...p, [s.name]: false }));
                           }
                         }}
                       >
-                        <RefreshCw size={14} className={isRestarting ? "spin" : ""} />
+                        <RefreshCw size={13} className={isRestarting ? "spin" : ""} />
                       </button>
                     )}
                     {s.status === "disabled" ? (
-                      <button
-                        className="icon-btn"
-                        title="Enable"
-                        onClick={() => enable(s.name)}
-                      >
-                        <Play size={14} />
+                      <button className="icon-btn" title="Enable" onClick={() => enable(s.name)}>
+                        <Play size={13} />
                       </button>
                     ) : (
-                      <button
-                        className="icon-btn icon-btn-danger"
-                        title="Stop"
-                        onClick={() => stop(s.name)}
-                      >
-                        <Square size={14} />
+                      <button className="icon-btn icon-btn-danger" title="Stop" onClick={() => stop(s.name)}>
+                        <Square size={13} />
                       </button>
                     )}
                   </div>
@@ -232,120 +231,149 @@ export function Dashboard() {
               );
             })}
           </div>
-        </section>
+        </div>
       )}
+
+      {/* ── Value strip ──────────────────────────────────────────────────── */}
+      <div className="value-strip">
+        <ValueCard
+          icon={<DollarSign size={18} />}
+          color="var(--success)"
+          value={costStr}
+          label="Saved this week"
+          sub="vs sending everything"
+        />
+        <ValueCard
+          icon={<Clock size={18} />}
+          color="var(--accent)"
+          value={summary?.context_deliveries != null ? String(summary.context_deliveries) : offline ? "—" : "—"}
+          label="Context deliveries"
+          sub="last 7 days"
+        />
+        <ValueCard
+          icon={<CheckSquare size={18} />}
+          color="var(--warning)"
+          value={summary?.tasks_completed != null ? String(summary.tasks_completed) : summary?.sessions != null ? String(summary.sessions) : offline ? "—" : "—"}
+          label={summary?.tasks_completed != null ? "Tasks done" : "Agent sessions"}
+          sub="last 7 days"
+        />
+      </div>
 
       {/* ── Projects ─────────────────────────────────────────────────────── */}
       <section className="dash-section">
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-          <h2 className="section-title" style={{ margin: 0 }}>Projects</h2>
+        <div className="dash-section-header">
+          <h2 className="section-title" style={{ margin: 0 }}>Your Projects</h2>
           <Link to="/projects" className="section-link">
             Manage <ChevronRight size={12} />
           </Link>
         </div>
+
         {projects.length === 0 ? (
-          <Link to="/projects" className="quick-action" style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <div className="quick-action-icon"><PlusCircle size={18} /></div>
+          <Link to="/projects" className="quick-action" style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <div className="quick-action-icon"><PlusCircle size={20} /></div>
             <div>
               <div className="quick-action-label">Index your first project</div>
               <div className="quick-action-desc">Point Synapses at a codebase to start</div>
             </div>
           </Link>
         ) : (
-          <div className="home-project-strip">
-            {projects.slice(0, 5).map((p) => (
+          <div className="dash-project-grid">
+            {projects.slice(0, 4).map((p) => (
               <Link key={p.path} to="/projects" style={{ textDecoration: "none" }}>
-                <div className="home-project-row">
-                  <FolderOpen size={13} style={{ color: "var(--text-dim)", flexShrink: 0 }} />
-                  <span className="home-project-name">{p.name}</span>
-                  <div className="home-project-meta">
-                    {p.nodes != null && <span>{p.nodes.toLocaleString()} nodes</span>}
-                    {p.scale && (
-                      <span className="project-scale-badge" style={{
-                        color: "var(--text-dim)",
-                        borderColor: "var(--border)",
-                        background: "var(--surface2)",
-                      }}>{p.scale}</span>
-                    )}
-                    {p.last_indexed && <span>{relTime(p.last_indexed)}</span>}
+                <div className="dash-project-card">
+                  <div className="dash-project-card-header">
+                    <FolderOpen size={14} style={{ color: "var(--accent)", flexShrink: 0 }} />
+                    <span className="dash-project-name">{p.name}</span>
                   </div>
+                  <div className="dash-project-meta">
+                    {scaleLabel(p.scale, p.files)}
+                  </div>
+                  {p.last_indexed && (
+                    <div className="dash-project-time">
+                      Updated {relTime(p.last_indexed)}
+                    </div>
+                  )}
                 </div>
               </Link>
             ))}
-            {projects.length > 5 && (
-              <Link to="/projects" style={{ fontSize: 12, color: "var(--text-dim)", textDecoration: "none", padding: "4px 14px" }}>
-                +{projects.length - 5} more projects →
+            {projects.length > 4 && (
+              <Link to="/projects" style={{ textDecoration: "none" }}>
+                <div className="dash-project-card dash-project-more">
+                  <span>+{projects.length - 4} more</span>
+                  <ChevronRight size={14} />
+                </div>
               </Link>
             )}
           </div>
         )}
       </section>
 
-      {/* ── Recent agent activity ─────────────────────────────────────────── */}
-      {agents.length > 0 && (
+      {/* ── Recent agent activity ──────────────────────────────────────────── */}
+      {agents.length > 0 ? (
         <section className="dash-section">
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-            <h2 className="section-title" style={{ margin: 0 }}>Recent Agents</h2>
+          <div className="dash-section-header">
+            <h2 className="section-title" style={{ margin: 0 }}>Recent Activity</h2>
             <Link to="/activity" className="section-link">
-              Full analytics <ChevronRight size={12} />
+              View all <ChevronRight size={12} />
             </Link>
           </div>
           <div className="agent-feed">
             {agents.map((a) => (
               <div key={a.agent_id} className="agent-feed-row">
-                <div className="agent-feed-dot" />
+                <div className="agent-feed-avatar">
+                  <Users size={12} />
+                </div>
                 <div className="agent-feed-info">
-                  <div className="agent-feed-id">{a.agent_id}</div>
+                  <div className="agent-feed-id">{agentShortName(a.agent_id)}</div>
                   <div className="agent-feed-meta">
                     {a.sessions} session{a.sessions !== 1 ? "s" : ""}
+                    {" · "}
+                    {a.tool_calls} calls
                     {a.last_seen && ` · ${relTime(a.last_seen)}`}
                   </div>
                 </div>
-                <div className="agent-feed-stat">{fmt(a.tokens_saved)} saved</div>
+                {a.tasks_completed != null && a.tasks_completed > 0 && (
+                  <div className="agent-feed-badge">
+                    {a.tasks_completed} done
+                  </div>
+                )}
               </div>
             ))}
           </div>
         </section>
-      )}
-
-      {/* ── Quick actions when empty ──────────────────────────────────────── */}
-      {agents.length === 0 && projects.length > 0 && (
+      ) : projects.length > 0 ? (
         <section className="dash-section">
-          <h2 className="section-title">Next Steps</h2>
+          <h2 className="section-title">Get started</h2>
           <div className="actions-row">
             <Link to="/settings" className="quick-action">
-              <div className="quick-action-icon"><Plug size={15} /></div>
-              <div className="quick-action-label">Connect an Agent</div>
-              <div className="quick-action-desc">Write MCP config for Claude Code, Cursor, or Windsurf</div>
-            </Link>
-            <Link to="/brain" className="quick-action">
-              <div className="quick-action-icon"><Zap size={15} style={{ color: "var(--accent)" }} /></div>
-              <div className="quick-action-label">Set Up AI Brain</div>
-              <div className="quick-action-desc">Download the local model for richer context</div>
+              <div className="quick-action-icon"><Plug size={16} /></div>
+              <div className="quick-action-label">Connect an editor</div>
+              <div className="quick-action-desc">Add Synapses to Claude Code, Cursor, or Windsurf</div>
             </Link>
           </div>
         </section>
-      )}
+      ) : null}
     </div>
   );
 }
 
-function HomeCard({
-  icon, accentColor, label, value, sub,
+function ValueCard({
+  icon, color, value, label, sub,
 }: {
   icon: React.ReactNode;
-  accentColor: string;
-  label: string;
+  color: string;
   value: string;
+  label: string;
   sub?: string;
 }) {
   return (
-    <div className="home-value-card">
-      <div className="home-value-accent" style={{ background: `linear-gradient(90deg, ${accentColor}, transparent)` }} />
-      <div style={{ color: accentColor, opacity: 0.8, marginBottom: 4 }}>{icon}</div>
-      <div className="home-value-label">{label}</div>
-      <div className="home-value-number">{value}</div>
-      {sub && <div className="home-value-sub">{sub}</div>}
+    <div className="value-card">
+      <div className="value-card-icon" style={{ color }}>
+        {icon}
+      </div>
+      <div className="value-number" style={{ color }}>{value}</div>
+      <div className="value-label">{label}</div>
+      {sub && <div className="value-sub">{sub}</div>}
     </div>
   );
 }
