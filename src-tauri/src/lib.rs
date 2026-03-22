@@ -873,14 +873,16 @@ fn extract_bundled_daemon(app: &AppHandle) -> Result<(), String> {
     std::fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
 
     let dest = bin_dir.join("synapses");
-    let version_marker = bin_dir.join("synapses.app_version");
 
-    // Re-extract if binary is missing or was bundled with a different app version.
-    let current_marker = std::fs::read_to_string(&version_marker).unwrap_or_default();
-    if dest.exists() && current_marker.trim() == APP_VERSION {
+    // Rule 1: Never overwrite a CLI-installed binary. If a synapses binary
+    // exists ANYWHERE (PATH or ~/.synapses/bin/), don't extract. The user
+    // manages their own binary (brew, go install, make setup). Version
+    // compatibility is handled by the mismatch check at runtime.
+    if dest.exists() || which::which("synapses").is_ok() {
         return Ok(());
     }
 
+    // No binary found anywhere — this is an app-only user. Extract.
     std::fs::copy(&bundled, &dest).map_err(|e| format!("Failed to extract daemon: {e}"))?;
 
     #[cfg(unix)]
@@ -891,7 +893,6 @@ fn extract_bundled_daemon(app: &AppHandle) -> Result<(), String> {
         std::fs::set_permissions(&dest, perms).map_err(|e| e.to_string())?;
     }
 
-    std::fs::write(&version_marker, APP_VERSION).ok();
     Ok(())
 }
 
@@ -905,8 +906,8 @@ fn register_launch_agent() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-        let bin = sidecar::synapses_data_dir().join("bin").join("synapses");
-        let bin_str = bin.to_string_lossy();
+        let bin_str = sidecar::find_binary("synapses")
+            .unwrap_or_else(|| sidecar::synapses_data_dir().join("bin").join("synapses").to_string_lossy().to_string());
         let log_dir = sidecar::synapses_data_dir().join("logs");
         std::fs::create_dir_all(&log_dir).ok();
         let log_str = log_dir.join("daemon.log").to_string_lossy().to_string();

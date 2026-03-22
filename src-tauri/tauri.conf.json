@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "identifier": "com.synapsesos.app",
   "build": {
-    "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
-    "frontendDist": "../dist"
+    "beforeDevCommand": "cd ../../synapses/web/console && npm run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "cd ../../synapses/web/console && npm ci --silent && npm run build",
+    "frontendDist": "../../synapses/web/console/dist"
   },
   "app": {
     "windows": [
