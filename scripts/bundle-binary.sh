@@ -55,12 +55,6 @@ build_for() {
   echo "  Building synapses for $goos/$goarch..."
   cd "$SYNAPSES_DIR"
 
-  # Build web console if dist/ doesn't exist
-  if [[ ! -d "web/console/dist" ]]; then
-    echo "  Building web console first..."
-    (cd web/console && npm ci --silent && npm run build)
-  fi
-
   local version
   version="$(git describe --tags --always 2>/dev/null || echo 'dev')"
 

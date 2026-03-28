@@ -162,7 +162,7 @@ If a newer version is available, a dialog prompts the user to install it. The up
 | Field | Value | Notes |
 |-------|-------|-------|
 | `productName` | `Synapses` | Display name |
-| `version` | `0.1.0` | App version (independent of synapses binary version) |
+| `version` | `0.8.0` | App version (matches synapses binary version) |
 | `identifier` | `com.synapsesos.app` | macOS bundle ID |
 | `devUrl` | `http://localhost:5173` | Vite dev server |
 | `frontendDist` | `../../synapses/web/console/dist` | Production build output |

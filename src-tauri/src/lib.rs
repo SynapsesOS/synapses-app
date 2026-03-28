@@ -958,6 +958,15 @@ fn extract_bundled_daemon(app: &AppHandle) -> Result<(), String> {
     })?;
     std::fs::write(&version_file, APP_VERSION).map_err(|e| format!("Failed to write version file: {e}"))?;
 
+    // Re-sign on macOS — rename strips the ad-hoc signature and macOS
+    // kills unsigned arm64 binaries.
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("codesign")
+            .args(["--force", "--sign", "-", dest.to_str().unwrap_or_default()])
+            .output();
+    }
+
     Ok(())
 }
 

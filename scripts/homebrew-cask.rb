@@ -3,7 +3,7 @@
 # CI updates version and sha256 on each release.
 
 cask "synapses" do
-  version "0.1.0"
+  version "0.8.0"
 
   on_arm do
     sha256 "PLACEHOLDER_ARM64_SHA256"
