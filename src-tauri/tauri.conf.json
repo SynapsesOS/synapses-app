@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "identifier": "com.synapsesos.app",
   "build": {
-    "beforeDevCommand": "cd ../../synapses/web/console && npm run dev",
+    "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "cd ../../synapses/web/console && npm ci --silent && npm run build",
-    "frontendDist": "../../synapses/web/console/dist"
+    "beforeBuildCommand": "npm ci --silent && npm run build",
+    "frontendDist": "../dist"
   },
   "app": {
     "windows": [
@@ -21,6 +21,7 @@
         "transparent": false
       }
     ],
+    "withGlobalTauri": true,
     "security": {
       "csp": null
     }
@@ -39,7 +40,8 @@
     "resources": {
       "resources/synapses-aarch64-apple-darwin": "synapses-aarch64-apple-darwin",
       "resources/synapses-x86_64-apple-darwin": "synapses-x86_64-apple-darwin",
-      "resources/synapses-x86_64-unknown-linux-gnu": "synapses-x86_64-unknown-linux-gnu"
+      "resources/synapses-x86_64-unknown-linux-gnu": "synapses-x86_64-unknown-linux-gnu",
+      "resources/synapses-x86_64-pc-windows-msvc.exe": "synapses-x86_64-pc-windows-msvc.exe"
     }
   },
   "plugins": {

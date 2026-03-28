@@ -858,10 +858,12 @@ fn extract_bundled_daemon(app: &AppHandle) -> Result<(), String> {
         ("macos", "aarch64") => "aarch64-apple-darwin",
         ("macos", "x86_64")  => "x86_64-apple-darwin",
         ("linux", "x86_64")  => "x86_64-unknown-linux-gnu",
+        ("windows", "x86_64") => "x86_64-pc-windows-msvc",
         (os, arch) => return Err(format!("Unsupported platform: {os}-{arch}")),
     };
 
-    let bundled = resource_dir.join(format!("synapses-{triple}"));
+    let bin_suffix = if cfg!(windows) { ".exe" } else { "" };
+    let bundled = resource_dir.join(format!("synapses-{triple}{bin_suffix}"));
     // Skip if the file doesn't exist or is a 0-byte dev stub.
     // CI places the real binary here before `tauri build`; local dev has an empty placeholder.
     let bundled_size = std::fs::metadata(&bundled).map(|m| m.len()).unwrap_or(0);
@@ -872,18 +874,36 @@ fn extract_bundled_daemon(app: &AppHandle) -> Result<(), String> {
     let bin_dir = sidecar::synapses_data_dir().join("bin");
     std::fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
 
-    let dest = bin_dir.join("synapses");
+    let dest = bin_dir.join(format!("synapses{bin_suffix}"));
+    let version_file = bin_dir.join(".app-extracted-version");
 
-    // Rule 1: Never overwrite a CLI-installed binary. If a synapses binary
-    // exists ANYWHERE (PATH or ~/.synapses/bin/), don't extract. The user
-    // manages their own binary (brew, go install, make setup). Version
-    // compatibility is handled by the mismatch check at runtime.
-    if dest.exists() || which::which("synapses").is_ok() {
-        return Ok(());
+    // If a binary exists on PATH (brew, go install, etc.), never overwrite — the
+    // user manages their own binary. Only manage the ~/.synapses/bin/ copy.
+    if which::which(format!("synapses{bin_suffix}")).is_ok() {
+        // PATH binary exists and it's NOT our extracted one (different path).
+        let path_bin = which::which(format!("synapses{bin_suffix}")).unwrap();
+        if path_bin != dest {
+            return Ok(());
+        }
     }
 
-    // No binary found anywhere — this is an app-only user. Extract.
+    // If dest exists, only overwrite if we previously extracted it (version file
+    // exists) AND the app version is newer than what was extracted.
+    if dest.exists() {
+        if let Ok(prev_version) = std::fs::read_to_string(&version_file) {
+            if prev_version.trim() == APP_VERSION {
+                return Ok(()); // same version, nothing to do
+            }
+            // App was updated — extract newer binary below
+        } else {
+            // No version file → binary was placed manually or by CLI. Don't touch it.
+            return Ok(());
+        }
+    }
+
+    // Extract bundled binary.
     std::fs::copy(&bundled, &dest).map_err(|e| format!("Failed to extract daemon: {e}"))?;
+    std::fs::write(&version_file, APP_VERSION).map_err(|e| format!("Failed to write version file: {e}"))?;
 
     #[cfg(unix)]
     {
@@ -894,6 +914,61 @@ fn extract_bundled_daemon(app: &AppHandle) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+// ── CLI symlink (Ollama-style) ────────────────────────────────────────────────
+
+/// Creates /usr/local/bin/synapses → ~/.synapses/bin/synapses symlink so the
+/// CLI is available on PATH. Skips if a different binary already exists there
+/// (e.g., from brew or go install). Fails silently if /usr/local/bin is not
+/// writable (no sudo required — user can add ~/.synapses/bin to PATH instead).
+fn install_cli_symlink_inner(daemon_bin: &std::path::Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let symlink_path = std::path::PathBuf::from("/usr/local/bin/synapses");
+
+        // If something already exists at the symlink path, check what it is.
+        if symlink_path.exists() || symlink_path.symlink_metadata().is_ok() {
+            // Read the symlink target (if it is one).
+            if let Ok(target) = std::fs::read_link(&symlink_path) {
+                if target == daemon_bin {
+                    return Ok(()); // Already points to our binary — nothing to do.
+                }
+                // Points elsewhere (brew, manual install). Don't overwrite.
+                return Ok(());
+            }
+            // Not a symlink — it's a real file. Don't overwrite.
+            return Ok(());
+        }
+
+        // Create parent directory if needed.
+        if let Some(parent) = symlink_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        // Create the symlink. May fail if /usr/local/bin is not writable — that's OK.
+        std::os::unix::fs::symlink(daemon_bin, &symlink_path)
+            .map_err(|e| format!("symlink failed: {e}"))?;
+    }
+
+    #[cfg(windows)]
+    {
+        // On Windows, the binary is already at ~/.synapses/bin/ which users can add to PATH.
+        // No symlink needed.
+        let _ = daemon_bin;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn install_cli_symlink() -> Result<String, String> {
+    let bin = sidecar::synapses_data_dir().join("bin").join("synapses");
+    if !bin.exists() {
+        return Err("Daemon binary not found at ~/.synapses/bin/synapses".to_string());
+    }
+    install_cli_symlink_inner(&bin)?;
+    Ok("CLI symlink created at /usr/local/bin/synapses".to_string())
 }
 
 // ── LaunchAgent registration (macOS) ─────────────────────────────────────────
@@ -956,6 +1031,49 @@ fn register_launch_agent() -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
         }
     }
+
+    #[cfg(target_os = "linux")]
+    {
+        let bin_str = sidecar::find_binary("synapses")
+            .unwrap_or_else(|| sidecar::synapses_data_dir().join("bin").join("synapses").to_string_lossy().to_string());
+        let log_dir = sidecar::synapses_data_dir().join("logs");
+        std::fs::create_dir_all(&log_dir).ok();
+        let log_str = log_dir.join("daemon.log").to_string_lossy().to_string();
+
+        let unit = format!(
+            r#"[Unit]
+Description=Synapses Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={bin_str} daemon serve
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:{log_str}
+StandardError=append:{log_str}
+
+[Install]
+WantedBy=default.target
+"#);
+
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        let systemd_dir = std::path::PathBuf::from(&home).join(".config/systemd/user");
+        std::fs::create_dir_all(&systemd_dir).ok();
+        let unit_path = systemd_dir.join("synapses-daemon.service");
+
+        let existing = std::fs::read_to_string(&unit_path).unwrap_or_default();
+        if existing != unit {
+            std::fs::write(&unit_path, &unit).map_err(|e| e.to_string())?;
+            let _ = std::process::Command::new("systemctl")
+                .args(["--user", "daemon-reload"])
+                .status();
+            let _ = std::process::Command::new("systemctl")
+                .args(["--user", "enable", "--now", "synapses-daemon"])
+                .status();
+        }
+    }
+
     Ok(())
 }
 
@@ -1381,6 +1499,7 @@ pub fn run() {
             pull_model,
             check_for_update,
             install_update,
+            install_cli_symlink,
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
@@ -1396,6 +1515,10 @@ pub fn run() {
             if daemon_bin.exists() && std::fs::metadata(&daemon_bin).map(|m| m.len()).unwrap_or(0) > 0 {
                 if let Err(e) = register_launch_agent() {
                     eprintln!("synapses-app: could not register launch agent: {e}");
+                }
+                // Create CLI symlink so `synapses` is available on PATH.
+                if let Err(e) = install_cli_symlink_inner(&daemon_bin) {
+                    eprintln!("synapses-app: could not create CLI symlink: {e}");
                 }
             }
 
