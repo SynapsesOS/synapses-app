@@ -916,6 +916,62 @@ fn extract_bundled_daemon(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// ── Anonymous usage ping ──────────────────────────────────────────────────────
+
+/// Sends a single anonymous ping to track aggregate install/usage counts.
+/// No personal data: just OS, arch, version, and event type.
+/// Fails silently — never blocks the app.
+async fn send_anonymous_ping() {
+    let data_dir = sidecar::synapses_data_dir();
+    let first_launch_marker = data_dir.join(".first_launch_sent");
+    let weekly_marker = data_dir.join(".weekly_ping");
+
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+    let version = APP_VERSION;
+
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build() {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    // First launch ping (only once ever)
+    if !first_launch_marker.exists() {
+        let url = format!(
+            "https://synapsesos.com/api/ping?e=first_launch&os={os}&arch={arch}&v={version}"
+        );
+        if client.get(&url).send().await.is_ok() {
+            let _ = std::fs::write(&first_launch_marker, "");
+        }
+    }
+
+    // Weekly active ping (at most once per 7 days)
+    let should_ping_weekly = if weekly_marker.exists() {
+        match std::fs::metadata(&weekly_marker) {
+            Ok(meta) => {
+                match meta.modified() {
+                    Ok(modified) => modified.elapsed().unwrap_or_default() > Duration::from_secs(7 * 24 * 3600),
+                    Err(_) => true,
+                }
+            }
+            Err(_) => true,
+        }
+    } else {
+        true
+    };
+
+    if should_ping_weekly {
+        let url = format!(
+            "https://synapsesos.com/api/ping?e=weekly_active&os={os}&arch={arch}&v={version}"
+        );
+        if client.get(&url).send().await.is_ok() {
+            let _ = std::fs::write(&weekly_marker, "");
+        }
+    }
+}
+
 // ── CLI symlink (Ollama-style) ────────────────────────────────────────────────
 
 /// Creates /usr/local/bin/synapses → ~/.synapses/bin/synapses symlink so the
@@ -1521,6 +1577,11 @@ pub fn run() {
                     eprintln!("synapses-app: could not create CLI symlink: {e}");
                 }
             }
+
+            // Anonymous usage ping (no personal data — just OS, arch, version, event type).
+            tauri::async_runtime::spawn(async {
+                send_anonymous_ping().await;
+            });
 
             let mgr_clone = mgr.clone();
             tauri::async_runtime::spawn(async move {
