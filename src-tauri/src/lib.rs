@@ -117,8 +117,27 @@ async fn enable_service(name: String, state: State<'_, AppSidecarManager>) -> Re
 
 // ── Tauri commands — synapses CLI ─────────────────────────────────────────────
 
+/// Allowed first arguments for run_synapses_cmd to prevent arbitrary command execution.
+const ALLOWED_SYNAPSES_CMDS: &[&str] = &[
+    "version", "--version", "status", "projects", "list", "doctor",
+    "memory", "cache", "index", "init", "connect", "daemon", "start",
+    "stop", "logs", "brief", "query", "export", "benchmark", "reset",
+];
+
 #[tauri::command]
 async fn run_synapses_cmd(args: Vec<String>) -> Result<String, String> {
+    // Validate the first argument against the allowed command whitelist.
+    if let Some(cmd) = args.first() {
+        if !ALLOWED_SYNAPSES_CMDS.contains(&cmd.as_str()) {
+            return Err(format!("Command '{}' is not allowed", cmd));
+        }
+    }
+    // Block dangerous flag patterns in any argument position.
+    for arg in &args {
+        if arg.contains("..") || arg.contains('\0') {
+            return Err("Invalid argument".to_string());
+        }
+    }
     let bin = find_binary("synapses")
         .ok_or_else(|| "synapses binary not found".to_string())?;
     let out = std::process::Command::new(bin)
@@ -731,8 +750,24 @@ fn read_app_settings() -> HashMap<String, serde_json::Value> {
 ///   - Guidance/rules file (.claude/CLAUDE.md, .cursor/rules/synapses.mdc, .windsurfrules)
 ///   - For Claude: .claude/settings.json (hooks + permissions)
 /// Returns the stdout from the connect command.
+const ALLOWED_EDITORS: &[&str] = &[
+    "claude", "cursor", "windsurf", "zed", "vscode", "antigravity",
+];
+
 #[tauri::command]
 fn write_mcp_config(editor: String, project_path: String) -> Result<String, String> {
+    // Validate editor against whitelist
+    if !ALLOWED_EDITORS.contains(&editor.as_str()) {
+        return Err(format!("Invalid editor: {}", editor));
+    }
+    // Validate project_path: no path traversal, must be a directory
+    let project = std::path::PathBuf::from(&project_path);
+    if project.components().any(|c| c == std::path::Component::ParentDir) {
+        return Err("Path traversal not allowed".to_string());
+    }
+    if !project.is_dir() {
+        return Err("Project path does not exist or is not a directory".to_string());
+    }
     let bin = find_binary("synapses")
         .ok_or_else(|| "synapses binary not found".to_string())?;
     let out = std::process::Command::new(bin)
@@ -901,17 +936,27 @@ fn extract_bundled_daemon(app: &AppHandle) -> Result<(), String> {
         }
     }
 
-    // Extract bundled binary.
-    std::fs::copy(&bundled, &dest).map_err(|e| format!("Failed to extract daemon: {e}"))?;
-    std::fs::write(&version_file, APP_VERSION).map_err(|e| format!("Failed to write version file: {e}"))?;
+    // Extract bundled binary atomically: copy to temp, set permissions, then rename.
+    // This prevents TOCTOU races where an attacker replaces dest between copy and chmod.
+    let temp_dest = bin_dir.join(format!(".synapses-extracting-{}{}", std::process::id(), bin_suffix));
+    let _ = std::fs::remove_file(&temp_dest); // clean up any stale temp file
+
+    std::fs::copy(&bundled, &temp_dest).map_err(|e| format!("Failed to extract daemon: {e}"))?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&dest).map_err(|e| e.to_string())?.permissions();
+        let mut perms = std::fs::metadata(&temp_dest).map_err(|e| e.to_string())?.permissions();
         perms.set_mode(0o755);
-        std::fs::set_permissions(&dest, perms).map_err(|e| e.to_string())?;
+        std::fs::set_permissions(&temp_dest, perms).map_err(|e| e.to_string())?;
     }
+
+    // Atomic rename to final destination
+    std::fs::rename(&temp_dest, &dest).map_err(|e| {
+        let _ = std::fs::remove_file(&temp_dest);
+        format!("Failed to place daemon binary: {e}")
+    })?;
+    std::fs::write(&version_file, APP_VERSION).map_err(|e| format!("Failed to write version file: {e}"))?;
 
     Ok(())
 }
@@ -982,18 +1027,20 @@ fn install_cli_symlink_inner(daemon_bin: &std::path::Path) -> Result<(), String>
     #[cfg(unix)]
     {
         let symlink_path = std::path::PathBuf::from("/usr/local/bin/synapses");
+        let daemon_canonical = daemon_bin.canonicalize()
+            .unwrap_or_else(|_| daemon_bin.to_path_buf());
 
         // If something already exists at the symlink path, check what it is.
-        if symlink_path.exists() || symlink_path.symlink_metadata().is_ok() {
-            // Read the symlink target (if it is one).
+        if symlink_path.symlink_metadata().is_ok() {
             if let Ok(target) = std::fs::read_link(&symlink_path) {
-                if target == daemon_bin {
-                    return Ok(()); // Already points to our binary — nothing to do.
+                // Compare canonical paths to handle relative vs absolute
+                let target_canonical = target.canonicalize()
+                    .unwrap_or_else(|_| target.clone());
+                if target_canonical == daemon_canonical {
+                    return Ok(()); // Already points to our binary.
                 }
-                // Points elsewhere (brew, manual install). Don't overwrite.
-                return Ok(());
             }
-            // Not a symlink — it's a real file. Don't overwrite.
+            // Exists but is not our symlink — don't overwrite.
             return Ok(());
         }
 
@@ -1003,14 +1050,12 @@ fn install_cli_symlink_inner(daemon_bin: &std::path::Path) -> Result<(), String>
         }
 
         // Create the symlink. May fail if /usr/local/bin is not writable — that's OK.
-        std::os::unix::fs::symlink(daemon_bin, &symlink_path)
+        std::os::unix::fs::symlink(&daemon_canonical, &symlink_path)
             .map_err(|e| format!("symlink failed: {e}"))?;
     }
 
     #[cfg(windows)]
     {
-        // On Windows, the binary is already at ~/.synapses/bin/ which users can add to PATH.
-        // No symlink needed.
         let _ = daemon_bin;
     }
 

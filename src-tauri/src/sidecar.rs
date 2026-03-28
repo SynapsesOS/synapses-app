@@ -317,18 +317,17 @@ pub fn synapses_data_dir() -> PathBuf {
 }
 
 pub fn find_binary(name: &str) -> Option<String> {
-    // Rule 2: prefer PATH over ~/.synapses/bin/.
-    // If someone ran `brew install synapses` or `go install`, they expect
-    // their CLI-managed binary to take priority. The app-extracted copy
-    // in ~/.synapses/bin/ is only a fallback for app-only users.
-    if let Ok(p) = which::which(name) {
-        return Some(p.to_string_lossy().to_string());
-    }
-    // Fall back to ~/.synapses/bin/ (app-extracted binary)
+    // Security: prefer the app-extracted binary (known-good) over PATH.
+    // PATH can be hijacked by placing a malicious binary in ~/bin/ or ./.
+    // Only fall back to PATH for users who explicitly installed via brew/go.
     let data_dir = synapses_data_dir();
     let local = data_dir.join("bin").join(name);
-    if local.exists() {
+    if local.exists() && local.metadata().map(|m| m.len()).unwrap_or(0) > 0 {
         return Some(local.to_string_lossy().to_string());
+    }
+    // Fall back to PATH (brew install, go install, etc.)
+    if let Ok(p) = which::which(name) {
+        return Some(p.to_string_lossy().to_string());
     }
     None
 }

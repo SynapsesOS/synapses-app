@@ -21,9 +21,9 @@
         "transparent": false
       }
     ],
-    "withGlobalTauri": true,
+    "withGlobalTauri": false,
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:11435 https://synapsesos.com; font-src 'self' data:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
     }
   },
   "bundle": {
@@ -46,7 +46,7 @@
   },
   "plugins": {
     "shell": {
-      "open": true
+      "open": "^https://"
     },
     "updater": {
       "pubkey": "PLACEHOLDER_ED25519_PUBKEY",
