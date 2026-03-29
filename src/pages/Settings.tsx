@@ -420,7 +420,7 @@ export function Settings() {
               </button>
             </div>
             <p className="text-dim" style={{ fontSize: 11, marginTop: 8 }}>
-              To wipe all data, run <code>synapses reset -all</code> from the terminal.
+              To wipe all data, run <code>synapses index --reset --all</code> from the terminal.
             </p>
           </section>
         </>

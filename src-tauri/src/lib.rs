@@ -658,38 +658,52 @@ fn get_knowledge_base_stats() -> HashMap<String, u64> {
 }
 
 /// Clears all agent memory (plans, tasks, episodes, memories, annotations)
-/// across all indexed projects. Preserves the code graph.
-/// Preserves the code graph (nodes, edges).
+/// across all indexed projects. Preserves the code graph (nodes, edges).
+/// Removes operational SQLite tables directly from each cached .db file.
 #[tauri::command]
 async fn clear_agent_memory() -> Result<(), String> {
-    let bin = find_binary("synapses").ok_or_else(|| "synapses binary not found".to_string())?;
-    let out = std::process::Command::new(bin)
-        .args(["memory", "clear", "-all"])
-        .output()
-        .map_err(|e| e.to_string())?;
-    if out.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&out.stderr).to_string()) }
+    let cache_dir = sidecar::synapses_data_dir().join("cache");
+    if !cache_dir.exists() {
+        return Ok(());
+    }
+    // Clear memory tables from each project's SQLite database
+    let entries = std::fs::read_dir(&cache_dir).map_err(|e| e.to_string())?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().map(|e| e == "db").unwrap_or(false) {
+            let tables = "DELETE FROM episodes; DELETE FROM plans; DELETE FROM tasks; \
+                         DELETE FROM memories; DELETE FROM annotations; DELETE FROM agent_messages; \
+                         DELETE FROM session_logs; DELETE FROM events;";
+            let _ = std::process::Command::new("sqlite3")
+                .arg(&path)
+                .arg(tables)
+                .output();
+        }
+    }
+    Ok(())
 }
 
 /// Clears activity logs (tool_calls) across all indexed projects AND pulse.sqlite.
 #[tauri::command]
 async fn clear_activity_logs() -> Result<(), String> {
-    // 1. Clear per-project tool_calls via CLI
-    let bin = find_binary("synapses").ok_or_else(|| "synapses binary not found".to_string())?;
-    let out = std::process::Command::new(bin)
-        .args(["memory", "clear", "-all", "--logs"])
-        .output()
-        .map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).to_string());
+    // 1. Clear per-project tool_calls from each cached DB
+    let cache_dir = sidecar::synapses_data_dir().join("cache");
+    if cache_dir.exists() {
+        let entries = std::fs::read_dir(&cache_dir).map_err(|e| e.to_string())?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map(|e| e == "db").unwrap_or(false) {
+                let _ = std::process::Command::new("sqlite3")
+                    .arg(&path)
+                    .arg("DELETE FROM tool_calls;")
+                    .output();
+            }
+        }
     }
 
     // 2. Also clear the global pulse.sqlite analytics store
     let pulse_path = sidecar::synapses_data_dir().join("pulse.sqlite");
     if pulse_path.exists() {
-        // Open with rusqlite-compatible connection via std::process to avoid adding a new dep.
-        // Use the synapses binary to run raw SQL, or just remove + let daemon recreate.
-        // Safest: DELETE FROM each known table directly via sqlite3 if available,
-        // otherwise remove the file entirely (daemon will recreate it on next start).
         let cleared = std::process::Command::new("sqlite3")
             .arg(&pulse_path)
             .arg("DELETE FROM tool_calls; DELETE FROM sessions;")
@@ -697,7 +711,6 @@ async fn clear_activity_logs() -> Result<(), String> {
             .map(|s| s.success())
             .unwrap_or(false);
         if !cleared {
-            // sqlite3 CLI not available — remove the file; daemon recreates schema on next start
             let _ = std::fs::remove_file(&pulse_path);
         }
     }
@@ -725,7 +738,7 @@ async fn clear_web_cache() -> Result<String, String> {
 fn wipe_all_data() -> Result<(), String> {
     let bin = find_binary("synapses").ok_or_else(|| "synapses binary not found".to_string())?;
     let _ = std::process::Command::new(&bin)
-        .args(["reset", "-all"])
+        .args(["index", "--reset", "--all"])
         .output()
         .map_err(|e| e.to_string())?;
     let _ = std::fs::remove_file(sidecar::synapses_data_dir().join("logs").join("daemon.log"));
