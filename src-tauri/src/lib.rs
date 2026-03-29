@@ -658,7 +658,7 @@ fn get_knowledge_base_stats() -> HashMap<String, u64> {
 }
 
 /// Clears all agent memory (plans, tasks, episodes, memories, annotations)
-/// across all indexed projects by calling `synapses memory clear -all`.
+/// across all indexed projects. Preserves the code graph.
 /// Preserves the code graph (nodes, edges).
 #[tauri::command]
 async fn clear_agent_memory() -> Result<(), String> {
@@ -962,7 +962,7 @@ fn extract_bundled_daemon(app: &AppHandle) -> Result<(), String> {
         std::fs::set_permissions(&temp_dest, perms).map_err(|e| e.to_string())?;
     }
 
-    // Back up the previous binary for rollback (synapses rollback).
+    // Back up the previous binary for rollback (synapses update --rollback).
     let prev_dest = bin_dir.join(format!("synapses.previous{bin_suffix}"));
     if dest.exists() {
         let _ = std::fs::copy(&dest, &prev_dest);
