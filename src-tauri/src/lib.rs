@@ -119,9 +119,9 @@ async fn enable_service(name: String, state: State<'_, AppSidecarManager>) -> Re
 
 /// Allowed first arguments for run_synapses_cmd to prevent arbitrary command execution.
 const ALLOWED_SYNAPSES_CMDS: &[&str] = &[
-    "version", "--version", "status", "projects", "list", "doctor",
-    "memory", "cache", "index", "init", "connect", "daemon", "start",
-    "stop", "logs", "brief", "query", "export", "benchmark", "reset",
+    "version", "--version", "status", "index", "init", "connect",
+    "daemon", "start", "stop", "config", "dev", "update", "remove",
+    "uninstall", "completion",
 ];
 
 #[tauri::command]
