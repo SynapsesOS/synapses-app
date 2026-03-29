@@ -922,6 +922,17 @@ fn extract_bundled_daemon(app: &AppHandle) -> Result<(), String> {
         }
     }
 
+    // If developer has linked a custom binary, skip extraction to preserve their override.
+    let dev_link_file = sidecar::synapses_data_dir().join("dev_link.json");
+    if dev_link_file.exists() {
+        if let Ok(data) = std::fs::read_to_string(&dev_link_file) {
+            if data.contains(r#""linked":true"#) || data.contains(r#""linked": true"#) {
+                eprintln!("synapses-app: dev link active — skipping binary extraction");
+                return Ok(());
+            }
+        }
+    }
+
     // If dest exists, only overwrite if we previously extracted it (version file
     // exists) AND the app version is newer than what was extracted.
     if dest.exists() {
@@ -949,6 +960,12 @@ fn extract_bundled_daemon(app: &AppHandle) -> Result<(), String> {
         let mut perms = std::fs::metadata(&temp_dest).map_err(|e| e.to_string())?.permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(&temp_dest, perms).map_err(|e| e.to_string())?;
+    }
+
+    // Back up the previous binary for rollback (synapses rollback).
+    let prev_dest = bin_dir.join(format!("synapses.previous{bin_suffix}"));
+    if dest.exists() {
+        let _ = std::fs::copy(&dest, &prev_dest);
     }
 
     // Atomic rename to final destination
