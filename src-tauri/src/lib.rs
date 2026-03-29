@@ -1262,6 +1262,92 @@ fn install_cli_symlink() -> Result<String, String> {
     Ok("CLI symlink created at /usr/local/bin/synapses".to_string())
 }
 
+// ── Shell PATH setup ─────────────────────────────────────────────────────────
+
+/// Adds `~/.synapses/bin` to the user's shell rc file(s) if not already present.
+/// Detects the active shell and appends the appropriate PATH export.
+/// Safe to call multiple times — only appends if the line is not already there.
+fn ensure_path_in_shell_rc() {
+    #[cfg(unix)]
+    {
+        let home = match std::env::var("HOME") {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+        let synapses_bin = format!("{}/.synapses/bin", home);
+
+        // Check if already on PATH
+        if let Ok(path) = std::env::var("PATH") {
+            if path.split(':').any(|p| p == synapses_bin || p == "$HOME/.synapses/bin") {
+                return;
+            }
+        }
+
+        // Detect shell and choose rc files
+        let shell = std::env::var("SHELL").unwrap_or_default();
+        let mut rc_files = Vec::new();
+
+        if shell.ends_with("/zsh") || shell.ends_with("/zsh-") {
+            rc_files.push(format!("{}/.zshrc", home));
+        } else if shell.ends_with("/bash") {
+            // bash on macOS uses .bash_profile for login shells
+            let bash_profile = format!("{}/.bash_profile", home);
+            let bashrc = format!("{}/.bashrc", home);
+            if std::path::Path::new(&bash_profile).exists() {
+                rc_files.push(bash_profile);
+            } else {
+                rc_files.push(bashrc);
+            }
+        } else if shell.ends_with("/fish") {
+            rc_files.push(format!("{}/.config/fish/config.fish", home));
+        }
+
+        // Fallback: if we couldn't detect, try common files
+        if rc_files.is_empty() {
+            let zshrc = format!("{}/.zshrc", home);
+            if std::path::Path::new(&zshrc).exists() {
+                rc_files.push(zshrc);
+            } else {
+                rc_files.push(format!("{}/.bashrc", home));
+            }
+        }
+
+        let export_line_bash = r#"export PATH="$HOME/.synapses/bin:$PATH""#;
+        let marker = "# Added by Synapses";
+
+        for rc_file in &rc_files {
+            // Read existing content and check if already added
+            let content = std::fs::read_to_string(rc_file).unwrap_or_default();
+            if content.contains(".synapses/bin") {
+                continue; // Already configured
+            }
+
+            // Fish uses different syntax
+            let line = if rc_file.ends_with("config.fish") {
+                format!("\n{marker}\nfish_add_path ~/.synapses/bin\n")
+            } else {
+                format!("\n{marker}\n{export_line_bash}\n")
+            };
+
+            // Create parent directories if needed (for fish)
+            if let Some(parent) = std::path::Path::new(rc_file).parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+
+            // Append to rc file
+            let mut file = match std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(rc_file)
+            {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            let _ = std::io::Write::write_all(&mut file, line.as_bytes());
+        }
+    }
+}
+
 // ── LaunchAgent registration (macOS) ─────────────────────────────────────────
 
 /// Registers a launchd LaunchAgent so the daemon starts automatically on login.
@@ -1811,6 +1897,8 @@ pub fn run() {
                 if let Err(e) = install_cli_symlink_inner(&daemon_bin) {
                     eprintln!("synapses-app: could not create CLI symlink: {e}");
                 }
+                // Add ~/.synapses/bin to shell rc files so CLI works in new shells.
+                ensure_path_in_shell_rc();
             }
 
             // Check for daemon binary updates from GitHub (runs in background, fails silently).
