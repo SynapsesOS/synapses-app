@@ -9,6 +9,16 @@ on:
   push:
     tags:
       - "v*"
+  # Auto-triggered by the daemon repo's release workflow via repository_dispatch
+  repository_dispatch:
+    types: [daemon-release]
+  # Manual trigger with version input
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag (e.g., v0.9.0) — must match an existing daemon release"
+        required: true
+        type: string
 
 permissions:
   contents: write
