@@ -77,6 +77,11 @@ jobs:
           tar -xzf /tmp/daemon/${{ matrix.daemon_asset }} -C /tmp/daemon synapses
           mv /tmp/daemon/synapses src-tauri/resources/${{ matrix.daemon_binary }}
           chmod +x src-tauri/resources/${{ matrix.daemon_binary }}
+          # Tauri validates ALL resource paths at build time, even for other platforms.
+          # Create empty stubs for non-target platforms so the build doesn't fail.
+          for f in src-tauri/resources/synapses-*; do
+            [ -s "$f" ] || touch "$f"
+          done
 
       # macOS: sign the daemon binary before Tauri bundles it (skipped if no Apple cert)
       - name: Sign daemon binary (macOS)
