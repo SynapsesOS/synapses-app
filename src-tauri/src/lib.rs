@@ -659,60 +659,37 @@ fn get_knowledge_base_stats() -> HashMap<String, u64> {
 
 /// Clears all agent memory (plans, tasks, episodes, memories, annotations)
 /// across all indexed projects. Preserves the code graph (nodes, edges).
-/// Removes operational SQLite tables directly from each cached .db file.
+/// Uses the Go binary's built-in SQLite driver — no external sqlite3 dependency.
 #[tauri::command]
 async fn clear_agent_memory() -> Result<(), String> {
-    let cache_dir = sidecar::synapses_data_dir().join("cache");
-    if !cache_dir.exists() {
-        return Ok(());
-    }
-    // Clear memory tables from each project's SQLite database
-    let entries = std::fs::read_dir(&cache_dir).map_err(|e| e.to_string())?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().map(|e| e == "db").unwrap_or(false) {
-            let tables = "DELETE FROM episodes; DELETE FROM plans; DELETE FROM tasks; \
-                         DELETE FROM memories; DELETE FROM annotations; DELETE FROM agent_messages; \
-                         DELETE FROM session_logs; DELETE FROM events;";
-            let _ = std::process::Command::new("sqlite3")
-                .arg(&path)
-                .arg(tables)
-                .output();
-        }
-    }
-    Ok(())
+    let bin = sidecar::find_binary("synapses")
+        .ok_or_else(|| "synapses binary not found".to_string())?;
+    let out = std::process::Command::new(bin)
+        .args(["index", "--clear-memory"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&out.stderr).to_string()) }
 }
 
 /// Clears activity logs (tool_calls) across all indexed projects AND pulse.sqlite.
 #[tauri::command]
 async fn clear_activity_logs() -> Result<(), String> {
-    // 1. Clear per-project tool_calls from each cached DB
-    let cache_dir = sidecar::synapses_data_dir().join("cache");
-    if cache_dir.exists() {
-        let entries = std::fs::read_dir(&cache_dir).map_err(|e| e.to_string())?;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().map(|e| e == "db").unwrap_or(false) {
-                let _ = std::process::Command::new("sqlite3")
-                    .arg(&path)
-                    .arg("DELETE FROM tool_calls;")
-                    .output();
-            }
-        }
+    // 1. Clear per-project tool_calls + memory via CLI (uses Go's built-in SQLite)
+    let bin = sidecar::find_binary("synapses")
+        .ok_or_else(|| "synapses binary not found".to_string())?;
+    let out = std::process::Command::new(bin)
+        .args(["index", "--clear-memory", "--all"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).to_string());
     }
 
     // 2. Also clear the global pulse.sqlite analytics store
+    // Remove the file entirely — daemon recreates schema on next start.
     let pulse_path = sidecar::synapses_data_dir().join("pulse.sqlite");
     if pulse_path.exists() {
-        let cleared = std::process::Command::new("sqlite3")
-            .arg(&pulse_path)
-            .arg("DELETE FROM tool_calls; DELETE FROM sessions;")
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if !cleared {
-            let _ = std::fs::remove_file(&pulse_path);
-        }
+        let _ = std::fs::remove_file(&pulse_path);
     }
 
     Ok(())
