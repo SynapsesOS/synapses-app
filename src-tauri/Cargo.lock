@@ -4185,11 +4185,13 @@ dependencies = [
 name = "synapses-app"
 version = "0.8.0"
 dependencies = [
+ "flate2",
  "futures-util",
  "libc",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "tar",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

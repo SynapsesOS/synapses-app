@@ -970,6 +970,187 @@ fn extract_bundled_daemon(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// ── Daemon binary auto-update ─────────────────────────────────────────────────
+
+/// Checks GitHub for a newer synapses daemon binary and downloads it if available.
+/// This decouples daemon updates from Tauri app updates — a new daemon release
+/// is picked up automatically without requiring the user to update the app.
+///
+/// Flow:
+/// 1. Get installed daemon version (`synapses version`)
+/// 2. Query GitHub API for latest synapses release tag
+/// 3. If newer, download the correct platform archive
+/// 4. Extract and atomically replace ~/.synapses/bin/synapses
+/// 5. Emit `daemon-updated` event to frontend
+///
+/// Runs once on app launch. Fails silently — never blocks the app.
+async fn check_daemon_binary_update(app_handle: AppHandle) {
+    // 1. Get installed version
+    let installed_version = match find_binary("synapses") {
+        Some(bin) => match std::process::Command::new(&bin).arg("version").output() {
+            Ok(out) => {
+                let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                v.trim_start_matches("synapses ").to_string()
+            }
+            Err(_) => return,
+        },
+        None => return, // no binary at all — extract_bundled_daemon handles this
+    };
+
+    // Skip dev builds
+    if installed_version == "dev" || installed_version.contains("dirty") {
+        return;
+    }
+
+    // 2. Query GitHub for latest release
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .user_agent("synapses-app")
+        .build()
+        .unwrap_or_default();
+
+    let latest: serde_json::Value = match client
+        .get("https://api.github.com/repos/SynapsesOS/synapses/releases/latest")
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => match r.json().await {
+            Ok(v) => v,
+            Err(_) => return,
+        },
+        _ => return,
+    };
+
+    let latest_tag = match latest["tag_name"].as_str() {
+        Some(t) => t.trim_start_matches('v'),
+        None => return,
+    };
+
+    // 3. Compare versions — only update if latest is strictly newer
+    if !is_newer_version(latest_tag, &installed_version) {
+        return;
+    }
+
+    // 4. Determine platform asset name
+    let asset_name = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "synapses_darwin_arm64.tar.gz",
+        ("macos", "x86_64") => "synapses_darwin_x86_64.tar.gz",
+        ("linux", "x86_64") => "synapses_linux_x86_64.tar.gz",
+        _ => return,
+    };
+
+    // Find the download URL from release assets
+    let download_url = match latest["assets"].as_array() {
+        Some(assets) => {
+            let found = assets.iter().find_map(|a| {
+                if a["name"].as_str() == Some(asset_name) {
+                    a["browser_download_url"].as_str().map(String::from)
+                } else {
+                    None
+                }
+            });
+            match found {
+                Some(url) => url,
+                None => return,
+            }
+        }
+        None => return,
+    };
+
+    // 5. Download to temp directory
+    let resp = match client.get(&download_url).send().await {
+        Ok(r) if r.status().is_success() => r,
+        _ => return,
+    };
+    let bytes = match resp.bytes().await {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+
+    // 6. Extract binary from tarball
+    let bin_dir = sidecar::synapses_data_dir().join("bin");
+    std::fs::create_dir_all(&bin_dir).ok();
+
+    let bin_suffix = if cfg!(windows) { ".exe" } else { "" };
+    let dest = bin_dir.join(format!("synapses{bin_suffix}"));
+    let temp_dest = bin_dir.join(format!(".synapses-update-{}{}", std::process::id(), bin_suffix));
+
+    // Decompress and extract the "synapses" binary from the tar.gz
+    let decoder = flate2::read::GzDecoder::new(&bytes[..]);
+    let mut archive = tar::Archive::new(decoder);
+    let mut extracted = false;
+    if let Ok(entries) = archive.entries() {
+        for entry in entries.flatten() {
+            if let Ok(path) = entry.path() {
+                if path.file_name().and_then(|n| n.to_str()) == Some(&format!("synapses{bin_suffix}")) {
+                    let mut entry = entry;
+                    if let Ok(mut out) = std::fs::File::create(&temp_dest) {
+                        if std::io::copy(&mut entry, &mut out).is_ok() {
+                            extracted = true;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    if !extracted {
+        let _ = std::fs::remove_file(&temp_dest);
+        return;
+    }
+
+    // Set executable permissions
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&temp_dest) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o755);
+            let _ = std::fs::set_permissions(&temp_dest, perms);
+        }
+    }
+
+    // Atomic rename
+    if std::fs::rename(&temp_dest, &dest).is_err() {
+        let _ = std::fs::remove_file(&temp_dest);
+        return;
+    }
+
+    // Write version file so extract_bundled_daemon doesn't overwrite
+    let version_file = bin_dir.join(".app-extracted-version");
+    let _ = std::fs::write(&version_file, latest_tag);
+
+    // Re-sign on macOS
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("codesign")
+            .args(["--force", "--sign", "-", dest.to_str().unwrap_or_default()])
+            .output();
+    }
+
+    // Emit event to frontend
+    let _ = app_handle.emit("daemon-updated", serde_json::json!({
+        "from": installed_version,
+        "to": latest_tag,
+    }));
+
+    eprintln!("synapses-app: daemon binary updated {} → {}", installed_version, latest_tag);
+}
+
+/// Simple semver comparison: returns true if `latest` is strictly newer than `current`.
+fn is_newer_version(latest: &str, current: &str) -> bool {
+    let parse = |v: &str| -> (u32, u32, u32) {
+        let parts: Vec<&str> = v.split('.').collect();
+        (
+            parts.first().and_then(|s| s.parse().ok()).unwrap_or(0),
+            parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0),
+            parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0),
+        )
+    };
+    parse(latest) > parse(current)
+}
+
 // ── Anonymous usage ping ──────────────────────────────────────────────────────
 
 /// Sends a single anonymous ping to track aggregate install/usage counts.
@@ -1631,6 +1812,12 @@ pub fn run() {
                     eprintln!("synapses-app: could not create CLI symlink: {e}");
                 }
             }
+
+            // Check for daemon binary updates from GitHub (runs in background, fails silently).
+            let update_handle = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                check_daemon_binary_update(update_handle).await;
+            });
 
             // Anonymous usage ping (no personal data — just OS, arch, version, event type).
             tauri::async_runtime::spawn(async {
