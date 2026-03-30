@@ -17,6 +17,8 @@ interface PulseSummary {
   sessions?: number;
   tasks_completed?: number;
   context_deliveries?: number;
+  context_f1?: number;
+  value_multiplier?: number;
 }
 
 interface AgentStat {
@@ -225,6 +227,9 @@ export function Dashboard({ onNav }: { onNav: (r: string) => void }) {
         <ValueCard color="var(--success)" value={costStr} label="Saved this week" sub="vs sending everything" />
         <ValueCard color="var(--accent)" value={summary?.context_deliveries != null ? String(summary.context_deliveries) : "-"} label="Context deliveries" sub="last 7 days" />
         <ValueCard color="var(--warning)" value={summary?.tasks_completed != null ? String(summary.tasks_completed) : summary?.sessions != null ? String(summary.sessions) : "-"} label={summary?.tasks_completed != null ? "Tasks done" : "Agent sessions"} sub="last 7 days" />
+        {summary?.context_f1 != null && isFinite(summary.context_f1) && summary.context_f1 > 0 && (
+          <ValueCard color="var(--info, var(--accent))" value={`${(summary.context_f1 * 100).toFixed(0)}%`} label="Context Quality" sub="context accuracy" />
+        )}
       </div>
 
       {/* Projects */}

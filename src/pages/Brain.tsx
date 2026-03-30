@@ -26,6 +26,13 @@ interface BrainHealthData {
   queue_size?: number;
 }
 
+interface TierCost {
+  tier: string;
+  cost_usd: number;
+  calls: number;
+  avg_latency_ms: number;
+}
+
 export function Brain() {
   const { addToast } = useToast();
   const [ollama, setOllama] = useState<OllamaStatus | null>(null);
@@ -37,6 +44,7 @@ export function Brain() {
   const [pulling, setPulling] = useState(false);
   const [pullProgress, setPullProgress] = useState<{ pct: number; status: string } | null>(null);
   const [projects, setProjects] = useState<string[]>([]);
+  const [costByTier, setCostByTier] = useState<TierCost[]>([]);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -57,8 +65,17 @@ export function Brain() {
         if (paths.length > 0) {
           try {
             const pulse = await get<any>("/api/admin/pulse/brain");
-            if (pulse) setHealth(pulse);
-          } catch { /* pulse may not be available */ }
+            if (pulse) {
+              setHealth(pulse);
+              setCostByTier(Array.isArray(pulse.cost_by_tier) ? pulse.cost_by_tier : []);
+            } else {
+              setHealth(null);
+              setCostByTier([]);
+            }
+          } catch {
+            setHealth(null);
+            setCostByTier([]);
+          }
         }
       }
     } finally {
@@ -275,7 +292,7 @@ export function Brain() {
       )}
 
       {/* Brain Health */}
-      {health && (
+      {health && (health.status || health.summaries_count != null || health.cache_hit_rate != null || health.queue_size != null) && (
         <section className="dash-section">
           <h2 className="section-title">Brain Health</h2>
           <div className="health-grid">
@@ -302,6 +319,34 @@ export function Brain() {
                 <div className="adv-card-label">Queue Size</div>
               </div>
             )}
+          </div>
+        </section>
+      )}
+      {/* Cost by Tier */}
+      {costByTier.length > 0 && (
+        <section className="dash-section">
+          <h2 className="section-title">Cost by Tier</h2>
+          <div className="an-table">
+            <div className="an-table-head">
+              <div className="an-table-row">
+                <div className="an-table-cell" style={{ flex: "0 0 30%" }}>Tier</div>
+                <div className="an-table-cell" style={{ flex: "0 0 25%" }}>Cost</div>
+                <div className="an-table-cell" style={{ flex: "0 0 25%" }}>Calls</div>
+                <div className="an-table-cell" style={{ flex: "0 0 20%" }}>Avg ms</div>
+              </div>
+            </div>
+            <div className="an-table-body">
+              {costByTier.filter((t) => t.tier).map((t) => (
+                <div key={t.tier} className="an-table-row">
+                  <div className="an-table-cell" style={{ flex: "0 0 30%" }}>{t.tier}</div>
+                  <div className="an-table-cell" style={{ flex: "0 0 25%" }}>
+                    {t.cost_usd == null ? "-" : t.cost_usd < 0.01 ? "<$0.01" : `$${t.cost_usd.toFixed(2)}`}
+                  </div>
+                  <div className="an-table-cell" style={{ flex: "0 0 25%" }}>{t.calls != null ? t.calls.toLocaleString() : "-"}</div>
+                  <div className="an-table-cell" style={{ flex: "0 0 20%" }}>{t.avg_latency_ms != null && t.avg_latency_ms > 0 ? t.avg_latency_ms.toFixed(0) : "-"}</div>
+                </div>
+              ))}
+            </div>
           </div>
         </section>
       )}

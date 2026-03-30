@@ -11,6 +11,10 @@ interface Summary {
   context_deliveries: number;
   sessions: number;
   tasks_completed: number;
+  context_precision?: number;
+  context_recall?: number;
+  context_f1?: number;
+  value_multiplier?: number;
 }
 
 interface ToolStats { name: string; calls: number; avg_ms: number; error_rate: number; }
@@ -18,6 +22,10 @@ interface AgentStats { agent_id: string; sessions: number; tool_calls: number; t
 interface TimelinePoint { date: string; tokens_saved: number; tool_calls: number; cost_saved_usd: number; }
 interface PulseDashboard { days: number; summary?: Summary; tools?: ToolStats[]; agents?: AgentStats[]; timeline?: TimelinePoint[]; }
 type Days = 7 | 30 | 90;
+
+function validPct(v?: number): boolean {
+  return v != null && isFinite(v) && v > 0;
+}
 
 function fmtNum(n?: number): string {
   if (n == null || n === 0) return "0";
@@ -211,6 +219,27 @@ export function Activity() {
       {olderAgents.length > 0 && olderAgents.some((a) => a.sessions > 0) && (
         <ActivitySection label="Older" agents={olderAgents.filter((a) => a.sessions > 0)} dimmed />
       )}
+
+      {/* Context Quality */}
+      {s && (validPct(s.context_f1) || validPct(s.context_precision) || validPct(s.context_recall) || (s.value_multiplier != null && isFinite(s.value_multiplier) && s.value_multiplier > 0)) ? (
+        <div className="dash-section" style={{ marginTop: 20 }}>
+          <div className="section-title" style={{ marginBottom: 10 }}>Context Quality</div>
+          <div className="adv-grid">
+            {validPct(s.context_f1) && (
+              <AdvCard label="Context F1" value={`${(s.context_f1! * 100).toFixed(0)}%`} />
+            )}
+            {validPct(s.context_precision) && (
+              <AdvCard label="Precision" value={`${(s.context_precision! * 100).toFixed(0)}%`} />
+            )}
+            {validPct(s.context_recall) && (
+              <AdvCard label="Recall" value={`${(s.context_recall! * 100).toFixed(0)}%`} />
+            )}
+            {s.value_multiplier != null && isFinite(s.value_multiplier) && s.value_multiplier > 0 && (
+              <AdvCard label="Value multiplier" value={`${s.value_multiplier.toFixed(1)}x`} />
+            )}
+          </div>
+        </div>
+      ) : null}
 
       {/* Advanced stats */}
       <div className="advanced-section">
